@@ -4,9 +4,8 @@ services:
     container_name: organizador
     restart: unless-stopped
     environment:
-      ADMIN_USER: ${ADMIN_USER:-eu}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?define ADMIN_PASSWORD}
       TZ: Europe/Lisbon
+      RESET_USERS: ${RESET_USERS:-0}
     ports:
       - "8085:8000"
     volumes:
