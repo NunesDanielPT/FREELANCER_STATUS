@@ -1,11 +1,20 @@
 services:
-  organizador:
+  claquete:
     build: .
     container_name: organizador
     restart: unless-stopped
     environment:
       TZ: Europe/Lisbon
-      RESET_USERS: ${RESET_USERS:-0}
+      # Endereço público do site (sem / no fim). Necessário para os emails de recuperação.
+      BASE_URL: ${BASE_URL:-}
+      # Opcional: se definido, só regista quem souber o código.
+      INVITE_CODE: ${INVITE_CODE:-}
+      # Email para recuperação de palavra-passe (opcional, ver README).
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
     ports:
       - "8085:8000"
     volumes:
