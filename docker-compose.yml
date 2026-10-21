@@ -1,9 +1,9 @@
 services:
-  organizador:
+  claquete:
     build: .
     image: claquete:local
     pull_policy: build
-    container_name: organizador
+    container_name: claquete
     restart: unless-stopped
     environment:
       TZ: Europe/Lisbon
