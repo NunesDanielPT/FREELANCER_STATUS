@@ -7,22 +7,25 @@ services:
     restart: unless-stopped
     environment:
       TZ: Europe/Lisbon
-      # Endereço público do site (sem / no fim). Necessário para os emails de recuperação.
+      # Endereço do site, sem / no fim (ex.: http://192.168.0.47:8085). Usado nos links dos emails.
       BASE_URL: ${BASE_URL:-}
       # Opcional: se definido, só regista quem souber o código.
       INVITE_CODE: ${INVITE_CODE:-}
-      # Email para recuperação de palavra-passe (opcional, ver README).
-      SMTP_HOST: ${SMTP_HOST:-}
-      SMTP_PORT: ${SMTP_PORT:-587}
+      # Email (Gmail só para envio). Define estas duas no Portainer, nunca aqui no GitHub.
       SMTP_USER: ${SMTP_USER:-}
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
-      SMTP_FROM: ${SMTP_FROM:-}
     ports:
       - "8085:8000"
     volumes:
-      - organizador_data:/data
+      - claquete_data:/data
+    networks:
+      - networkpi
     security_opt:
       - no-new-privileges:true
 
 volumes:
-  organizador_data:
+  claquete_data:
+
+networks:
+  networkpi:
+    external: true

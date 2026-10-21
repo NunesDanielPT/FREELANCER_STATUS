@@ -5,15 +5,23 @@ Cada utilizador só vê os seus dados. Só biblioteca standard do Python + SQLit
 
 ## Deploy no Portainer
 Stacks > Add stack > Repository > URL deste repo, `docker-compose.yml`.
-Todas as variáveis de ambiente são opcionais:
+Usa a rede Docker já existente `networkpi` (tem de existir antes do deploy).
+Variáveis de ambiente (todas opcionais, definem-se no Portainer, nunca no GitHub):
 
 | Variável | Para quê |
 |---|---|
-| `INVITE_CODE` | Se definido, o registo exige este código (recomendado para só entrarem amigos). |
-| `BASE_URL` | Endereço do site, ex.: `https://faturas.exemplo.pt`. Usado nos links de email. |
-| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM` | Envio de emails (recuperação de palavra-passe). Ex. Gmail: `smtp.gmail.com`, `587`, o teu email, uma "palavra-passe de app". |
+| `BASE_URL` | Endereço do site, ex.: `http://192.168.0.47:8085`. Necessário para os links dos emails. |
+| `SMTP_USER` | O teu Gmail usado só para enviar (ex.: `claquete.envio@gmail.com`). |
+| `SMTP_PASSWORD` | "Palavra-passe de app" do Gmail (16 letras), não a palavra-passe normal. |
+| `INVITE_CODE` | Se definido, o registo exige este código. |
 
-Sem SMTP/BASE_URL, o link de recuperação aparece nos **Logs** do container (Portainer > Containers > organizador > Logs).
+Emails enviados: boas-vindas no registo e link de recuperação de palavra-passe.
+Sem `SMTP_USER`/`SMTP_PASSWORD`/`BASE_URL`, o link de recuperação aparece nos Logs do container.
+
+## Gmail: palavra-passe de app
+1. Na conta Gmail de envio, ativa a verificação em 2 passos.
+2. Em https://myaccount.google.com/apppasswords cria uma palavra-passe de app (nome: Claquete).
+3. Copia as 16 letras para `SMTP_PASSWORD` no Portainer.
 
 ## Backup
-docker run --rm -v organizador_data:/data -v $PWD:/b alpine tar czf /b/backup.tgz -C /data .
+docker run --rm -v claquete_data:/data -v $PWD:/b alpine tar czf /b/backup.tgz -C /data .

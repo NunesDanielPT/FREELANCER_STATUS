@@ -3,6 +3,7 @@
 import os, re, ssl, time, math, hmac, html, hashlib, secrets, sqlite3, smtplib, calendar, threading
 import datetime as dt
 from email.message import EmailMessage
+from email.utils import formataddr
 from http import cookies
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
@@ -79,15 +80,23 @@ def session_cookie(u, secure):
     x = int(time.time()) + 30 * 86400
     return ("Set-Cookie", f"s={u['id']}.{x}.{sign(f'{u['id']}.{x}.{u['pw'][-16:]}')}; Max-Age=2592000; Path=/; HttpOnly; SameSite=Strict" + ("; Secure" if secure else ""))
 
+# Email: por omissao usa o Gmail. Basta definir SMTP_USER (o teu Gmail) e SMTP_PASSWORD (palavra-passe de app).
+# NUNCA escrevas a palavra-passe aqui no codigo: o repositorio e publico. Define-a nas variaveis do Portainer.
+def smtp_ready(): return bool(os.environ.get("SMTP_USER") and os.environ.get("SMTP_PASSWORD"))
+
 def send_mail(to, subject, body):
     try:
-        m = EmailMessage(); m["From"] = os.environ.get("SMTP_FROM") or os.environ["SMTP_USER"]; m["To"] = to; m["Subject"] = subject; m.set_content(body)
-        h, port = os.environ["SMTP_HOST"], int(os.environ.get("SMTP_PORT", "587")); ctx = ssl.create_default_context()
+        user = os.environ["SMTP_USER"]; m = EmailMessage()
+        m["From"] = formataddr(("Claquete", os.environ.get("SMTP_FROM") or user)); m["To"] = to; m["Subject"] = subject; m.set_content(body)
+        h, port = os.environ.get("SMTP_HOST") or "smtp.gmail.com", int(os.environ.get("SMTP_PORT") or 587); ctx = ssl.create_default_context()
         if port == 465: s = smtplib.SMTP_SSL(h, port, timeout=20, context=ctx)
         else: s = smtplib.SMTP(h, port, timeout=20); s.starttls(context=ctx)
-        if os.environ.get("SMTP_USER"): s.login(os.environ["SMTP_USER"], os.environ.get("SMTP_PASSWORD", ""))
-        s.send_message(m); s.quit()
+        s.login(user, os.environ["SMTP_PASSWORD"]); s.send_message(m); s.quit()
+        print(f"Email enviado: {subject} -> {to}", flush=True)
     except Exception as ex: print("ERRO SMTP:", ex, flush=True)
+
+def mail_async(to, subject, body):
+    if smtp_ready(): threading.Thread(target=send_mail, args=(to, subject, body), daemon=True).start()
 
 # ---------------------------------------------------------------- estilo
 CSS = """
@@ -331,6 +340,7 @@ class H(BaseHTTPRequestHandler):
             try: uid = run("insert into users(username,email,name,pw,ics,created) values(?,?,?,?,?,?)", (v["u"], v["email"], v["u"], hash_pw(f["p"]), secrets.token_hex(20), today().isoformat()))
             except sqlite3.IntegrityError: err = "Esse utilizador ou email já está registado."
         if err: return self.out(self.register_page(err, v), 400)
+        mail_async(v["email"], "Bem-vindo à Claquete", f"Olá {v['u']},\n\nA tua conta na Claquete foi criada com sucesso.\n\nUtilizador: {v['u']}\n" + (f"Entrar: {BASE_URL}\n" if BASE_URL else "") + "\nSe não foste tu a criar esta conta, ignora este email.")
         self.go("/", [session_cookie(one("select * from users where id=?", (uid,)), self.https())])
 
     def forgot_page(self, sent=False):
@@ -346,9 +356,9 @@ class H(BaseHTTPRequestHandler):
         if u:
             tok = secrets.token_urlsafe(32); run("delete from resets where user_id=? or exp<?", (u["id"], time.time()))
             run("insert into resets values(?,?,?)", (hashlib.sha256(tok.encode()).hexdigest(), u["id"], int(time.time()) + 3600))
-            if BASE_URL and os.environ.get("SMTP_HOST"):
-                threading.Thread(target=send_mail, args=(u["email"], "Recuperar palavra-passe · Claquete", f"Olá {u['name']},\n\nPara definires uma nova palavra-passe abre este link (válido 1 hora):\n{BASE_URL}/reset?t={tok}\n\nSe não pediste isto, ignora este email."), daemon=True).start()
-            else: print(f"[RECUPERAÇÃO] email não configurado. Link para {u['username']}: http://{self.headers.get('Host')}/reset?t={tok}", flush=True)
+            if BASE_URL and smtp_ready():
+                mail_async(u["email"], "Recuperar palavra-passe · Claquete", f"Olá {u['name']},\n\nPara definires uma nova palavra-passe abre este link (válido 1 hora):\n{BASE_URL}/reset?t={tok}\n\nSe não pediste isto, ignora este email.")
+            else: print(f"[RECUPERAÇÃO] email/BASE_URL não configurado. Link para {u['username']}: http://{self.headers.get('Host')}/reset?t={tok}", flush=True)
         self.out(self.forgot_page(True))
 
     def reset_page(self, tok, err=""):
@@ -548,5 +558,5 @@ class H(BaseHTTPRequestHandler):
         self.go("/settings?ok=password", [session_cookie(nu, self.https())])
 
 if __name__ == "__main__":
-    init(); print("Claquete a escutar na porta 8000", flush=True)
+    init(); print("Claquete a escutar na porta 8000 | email:", "ativo" if smtp_ready() else "desligado", "| BASE_URL:", BASE_URL or "(vazio)", flush=True)
     ThreadingHTTPServer(("0.0.0.0", 8000), H).serve_forever()
