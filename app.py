@@ -38,14 +38,20 @@ def init():
       client_id integer references clients(id) on delete set null, amount real default 0, invoice_by text,
       invoice_no text, invoiced integer default 0, paid integer default 0, notes text);
     create table if not exists kv(k text primary key, v text);""")
-    if not c.execute("select 1 from users").fetchone():
-        c.execute("insert into users(name,pw) values(?,?)", (os.environ.get("ADMIN_USER", "admin"), hash_pw(os.environ["ADMIN_PASSWORD"])))
+    if os.environ.get("RESET_USERS") == "1":
+        c.execute("delete from users")
     for k in ("secret", "ics"):
         if not c.execute("select 1 from kv where k=?", (k,)).fetchone():
             c.execute("insert into kv values(?,?)", (k, secrets.token_hex(24)))
     c.commit(); c.close()
 
 def kv(k): return rows("select v from kv where k=?", (k,))[0]["v"]
+def has_users(): return bool(rows("select 1 from users"))
+
+def session_cookie(uid):
+    x = int(time.time()) + 30 * 86400
+    return ("Set-Cookie", f"s={uid}.{x}.{sign(f'{uid}.{x}')}; Max-Age=2592000; Path=/; HttpOnly; SameSite=Strict")
+
 def sign(s): return hmac.new(kv("secret").encode(), s.encode(), hashlib.sha256).hexdigest()
 
 CSS = """
@@ -130,7 +136,8 @@ class H(BaseHTTPRequestHandler):
         if p == "/calendar.ics":
             if hmac.compare_digest(q.get("k", [""])[0], kv("ics")): return self.ics()
             return self.out("Não autorizado", 403, "text/plain")
-        if p == "/login": return self.out(self.login_page())
+        if p == "/register": return self.go("/login") if has_users() else self.out(self.register_page())
+        if p == "/login": return self.go("/register") if not has_users() else self.out(self.login_page())
         if not self.uid(): return self.go("/login")
         g = lambda k, d="": q.get(k, [d])[0]
         parts = p.strip("/").split("/")
@@ -151,6 +158,7 @@ class H(BaseHTTPRequestHandler):
         f = {k: v[0] for k, v in parse_qs(self.rfile.read(min(n, 100000)).decode()).items()}
         p = urlparse(self.path).path; parts = p.strip("/").split("/")
         if p == "/login": return self.do_login(f)
+        if p == "/register": return self.do_register(f)
         if not self.uid(): return self.go("/login")
         if p == "/logout": return self.go("/login", [("Set-Cookie", "s=; Max-Age=0; Path=/")])
         nxt = self.safe(f.get("next", "/"))
@@ -195,11 +203,25 @@ class H(BaseHTTPRequestHandler):
         if n >= 5 and time.time() - t < 300: return self.out(self.login_page("Demasiadas tentativas. Espera 5 minutos."), 429)
         r = rows("select * from users where name=?", (f.get("u", ""),))
         if r and check_pw(f.get("p", ""), r[0]["pw"]):
-            self.fails.pop(ip, None); x = int(time.time()) + 30 * 86400
-            c = f'{r[0]["id"]}.{x}.{sign(f"{r[0]["id"]}.{x}")}'
-            return self.go("/", [("Set-Cookie", f"s={c}; Max-Age=2592000; Path=/; HttpOnly; SameSite=Strict")])
+            self.fails.pop(ip, None)
+            return self.go("/", [session_cookie(r[0]["id"])])
         self.fails[ip] = (n + 1, time.time())
         self.out(self.login_page("Utilizador ou palavra-passe incorretos."), 401)
+
+    def register_page(self, err=""):
+        return page("Criar conta", f'<h1>Criar a tua conta</h1><p class="m">Só podes fazer isto uma vez. Depois do registo, esta página fecha.</p>{f"<p class=late>{err}</p>" if err else ""}'
+            '<form class="f card" method="post" action="/register"><label>Utilizador</label><input name="u" autocomplete="username" required autofocus>'
+            '<label>Palavra-passe (mínimo 8 caracteres)</label><input name="p" type="password" autocomplete="new-password" minlength="8" required>'
+            '<label>Repetir palavra-passe</label><input name="p2" type="password" autocomplete="new-password" minlength="8" required><p><button class="p">Criar conta e entrar</button></p></form>', logged=False)
+
+    def do_register(self, f):
+        if has_users(): return self.go("/login")
+        u, p = f.get("u", "").strip(), f.get("p", "")
+        if not u: return self.out(self.register_page("Escolhe um utilizador."), 400)
+        if len(p) < 8: return self.out(self.register_page("A palavra-passe tem de ter pelo menos 8 caracteres."), 400)
+        if p != f.get("p2"): return self.out(self.register_page("As palavras-passe não coincidem."), 400)
+        uid = run("insert into users(name,pw) values(?,?)", (u, hash_pw(p)))
+        self.go("/", [session_cookie(uid)])
 
     # ---- pages
     def home(self):
