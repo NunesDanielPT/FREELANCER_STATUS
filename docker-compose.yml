@@ -1,6 +1,8 @@
 services:
-  claquete:
+  organizador:
     build: .
+    image: claquete:local
+    pull_policy: build
     container_name: organizador
     restart: unless-stopped
     environment:
