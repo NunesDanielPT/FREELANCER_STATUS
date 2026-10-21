@@ -119,7 +119,7 @@ class H(BaseHTTPRequestHandler):
     def out(self, body, code=200, ctype="text/html; charset=utf-8", hd=()):
         b = body.encode(); self.send_response(code)
         for k, v in (("Content-Type", ctype), ("Content-Length", str(len(b))), ("X-Frame-Options", "DENY"),
-                     ("X-Content-Type-Options", "nosniff"), ("Referrer-Policy", "no-referrer"),
+                     ("X-Content-Type-Options", "nosniff"), ("Referrer-Policy", "same-origin"),
                      ("Content-Security-Policy", "default-src 'self'; style-src 'unsafe-inline'; form-action 'self'"), *hd):
             self.send_header(k, v)
         self.end_headers(); self.wfile.write(b)
@@ -154,7 +154,7 @@ class H(BaseHTTPRequestHandler):
     def do_POST(self):
         org, sf = self.headers.get("Origin"), self.headers.get("Sec-Fetch-Site")
         hosts = (self.headers.get("Host"), self.headers.get("X-Forwarded-Host"))
-        if (sf == "cross-site") or (not sf and org and urlparse(org).netloc not in hosts):
+        if (sf == "cross-site") or (not sf and org not in (None, "null") and urlparse(org).netloc not in hosts):
             return self.out("Pedido recusado", 403, "text/plain")
         n = int(self.headers.get("Content-Length", 0) or 0)
         f = {k: v[0] for k, v in parse_qs(self.rfile.read(min(n, 100000)).decode()).items()}
