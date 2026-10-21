@@ -1,0 +1,18 @@
+services:
+  organizador:
+    build: .
+    container_name: organizador
+    restart: unless-stopped
+    environment:
+      ADMIN_USER: ${ADMIN_USER:-eu}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?define ADMIN_PASSWORD}
+      TZ: Europe/Lisbon
+    ports:
+      - "8085:8000"
+    volumes:
+      - organizador_data:/data
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  organizador_data:
