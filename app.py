@@ -152,8 +152,10 @@ class H(BaseHTTPRequestHandler):
         self.out(page("Não encontrado", "<h1>Página não encontrada</h1>"), 404)
 
     def do_POST(self):
-        org = self.headers.get("Origin")
-        if org and urlparse(org).netloc != self.headers.get("Host"): return self.out("Pedido recusado", 403, "text/plain")
+        org, sf = self.headers.get("Origin"), self.headers.get("Sec-Fetch-Site")
+        hosts = (self.headers.get("Host"), self.headers.get("X-Forwarded-Host"))
+        if (sf == "cross-site") or (not sf and org and urlparse(org).netloc not in hosts):
+            return self.out("Pedido recusado", 403, "text/plain")
         n = int(self.headers.get("Content-Length", 0) or 0)
         f = {k: v[0] for k, v in parse_qs(self.rfile.read(min(n, 100000)).decode()).items()}
         p = urlparse(self.path).path; parts = p.strip("/").split("/")
