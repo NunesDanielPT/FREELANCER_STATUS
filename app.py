@@ -7,21 +7,34 @@ from email.message import EmailMessage
 from email.utils import formataddr
 from http import cookies
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, quote
+import i18n
+from i18n import tx, M0, M1
 
 DB = os.environ.get("DB_PATH", "/data/claquete.db")
 BASE_URL = os.environ.get("BASE_URL", "").rstrip("/")
 INVITE = os.environ.get("INVITE_CODE", "")
 MES = "janeiro fevereiro março abril maio junho julho agosto setembro outubro novembro dezembro".split()
 
-e = lambda s: html.escape("" if s is None else str(s))
+e = lambda s: M0 + html.escape("" if s is None else str(s)) + M1      # texto de utilizadores: nunca é traduzido
+eh = lambda s: html.escape("" if s is None else str(s))              # texto fixo do código: é traduzido
+now_str = lambda: dt.datetime.now().strftime("%Y-%m-%d %H:%M")
+def dsep(): return "." if i18n.lang() == "en" else ","
 today = lambda: dt.date.today()
 D = dt.date.fromisoformat
 
-def eur(v): return f"{(v or 0):,.2f}".replace(",", " ").replace(".", ",") + " €"
-def short(v): return (f"{v / 1000:g}k".replace(".", ",") if v >= 1000 else f"{v:g}")
+def eur(v):
+    s, l = f"{(v or 0):,.2f}", i18n.lang()
+    if l == "en": return "€" + s
+    return s.replace(",", "\x00").replace(".", ",").replace("\x00", {"pt": " ", "es": ".", "it": ".", "fr": "\u202f"}[l]) + " €"
+def short(v):
+    s = f"{v / 1000:g}k" if v >= 1000 else f"{v:g}"
+    return s.replace(".", ",") if v >= 1000 and i18n.lang() != "en" else s
 def num(s):
-    try: return float(str(s).replace(" ", "").replace(",", "."))
+    s = str(s).replace(" ", "").replace("\u202f", "")
+    if "," in s and "." in s: s = s.replace(".", "").replace(",", ".") if s.rfind(",") > s.rfind(".") else s.replace(",", "")
+    else: s = s.replace(",", ".")
+    try: return float(s)
     except ValueError: return 0.0
 def okdate(s):
     try: return D(s).isoformat()
@@ -64,7 +77,7 @@ DEFAULTS = {
     "hero_title": "Sabe sempre o que falta faturar e o que falta receber.",
     "hero_text": "Eventos, clientes e faturas num só sítio, feito para freelancers de audiovisual. Não emite faturas: só te ajuda a não perder nenhuma.",
     "c_brand": "#3b4cdb", "c_todo": "#e5484d", "c_inv": "#f0a020", "c_paid": "#2fa56b",
-    "reg_open": "1", "invite": "",
+    "reg_open": "1", "invite": "", "lang": "pt",
     "ad_on": "0", "ad_img": "", "ad_link": "", "ad_text": "", "ad_app": "1", "ad_auth": "0",
 }
 
@@ -235,7 +248,10 @@ def init():
       end_date text not null, client_id integer references clients(id) on delete set null, amount real default 0, invoice_date text,
       invoice_no text, paid integer default 0, paid_date text, notes text);
     create table if not exists items(id integer primary key, event_id integer references events(id) on delete cascade, label text, amount real);
-    create table if not exists kv(k text primary key, v text);""")
+    create table if not exists kv(k text primary key, v text);
+    create table if not exists tickets(id integer primary key, token text unique, user_id integer, name text, email text, subject text, status text default 'open',
+      lang text, created text, updated text, unread_admin integer default 1, unread_user integer default 0);
+    create table if not exists tmsgs(id integer primary key, ticket_id integer references tickets(id) on delete cascade, from_admin integer default 0, body text, created text);""")
     if not c.execute("select 1 from kv where k='secret'").fetchone():
         c.execute("insert into kv values('secret',?)", (secrets.token_hex(32),))
     migrate(c)
@@ -351,6 +367,14 @@ code,textarea.mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.
 .bk{display:flex;justify-content:space-between;gap:10px;align-items:center;padding:9px 0;border-top:1px solid var(--line)}.bk:first-of-type{border-top:0}
 .row2{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.row2 form{margin:0}
 @media(max-width:820px){.g4{grid-template-columns:1fr 1fr}}
+.lang{display:flex;gap:5px;justify-content:center;flex-wrap:wrap}.lang a{font-size:.75rem;font-weight:700;padding:3px 9px;border-radius:99px;border:1px solid var(--line);text-decoration:none;color:var(--mut)}
+.lang a:hover{color:var(--ink)}.lang a.on{background:var(--ink);color:var(--bg);border-color:var(--ink)}.lang.full{justify-content:flex-start}.lang.full a{font-size:.9rem;padding:7px 14px}
+.ft{margin-top:40px;display:flex;flex-direction:column;gap:12px;align-items:center;text-align:center}.fl{display:flex;gap:18px}.fl a{color:var(--mut);text-decoration:none;font-size:.9rem;font-weight:560}.fl a:hover{color:var(--ink)}
+.flag{width:18px;height:12px;vertical-align:-1px;border-radius:2px}.pub{max-width:660px;margin:0 auto;padding:28px clamp(14px,4vw,24px) 40px}.pub .brand{padding-left:0}
+.btn.sup{width:100%;text-align:center}.btn.sup svg{width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round;vertical-align:-3px;margin-right:6px}
+.msgs{display:flex;flex-direction:column;gap:10px;margin:16px 0}.mg{max-width:90%;padding:10px 14px;border-radius:14px;background:var(--sf);border:1px solid var(--line);white-space:pre-wrap;overflow-wrap:anywhere}
+.mg.a{align-self:flex-end;background:color-mix(in srgb,var(--brand) 12%,var(--sf));border-color:color-mix(in srgb,var(--brand) 30%,var(--line))}.mg small{display:block;color:var(--mut);font-size:.75rem;margin-bottom:2px}
+.ab li{margin:7px 0}.ab ul{padding-left:20px;margin:6px 0}.cr{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 """
 
 IC = {"home": '<path d="M3 11l9-8 9 8v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>',
@@ -361,9 +385,23 @@ IC = {"home": '<path d="M3 11l9-8 9 8v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z
       "gear": '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9L7 7M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"/>'}
 NAV = [("/", "Início", "home"), ("/calendar", "Calendário", "cal"), ("/events", "Eventos", "list"), ("/clients", "Clientes", "users"), ("/stats", "Estatísticas", "chart")]
 IC["shield"] = '<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M9 12l2 2 4-4"/>'
+IC["chat"] = '<path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/>'
+FLAG = ('<svg class="flag" viewBox="0 0 30 20" role="img" aria-label="Portugal"><rect width="30" height="20" fill="#d4202c"/><rect width="12" height="20" fill="#046a38"/>'
+        '<circle cx="12" cy="10" r="4" fill="#ffd400" stroke="#fff" stroke-width=".7"/></svg>')
+SUPBTN = f'<p class="l2"><a class="btn sup" href="/support"><svg viewBox="0 0 24 24">{IC["chat"]}</svg>Suporte</a></p>'
+
+def langbar(full=False):
+    cur, nx = i18n.lang(), quote(i18n.path(), safe="")
+    return (f'<div class="lang{" full" if full else ""}">' + "".join(
+        f'<a href="/lang?l={k}&amp;next={nx}" hreflang="{k}"{" class=on aria-current=true" if k == cur else ""}>{v if full else k.upper()}</a>' for k, v in i18n.LANGS.items()) + "</div>")
+
+def foot(n=0):
+    b = f' <span class="bd s">{n}</span>' if n else ""
+    return (f'<footer class="ft">{langbar()}<div class="fl"><a href="/support">Suporte{b}</a><a href="/about">Sobre</a></div>'
+            f'<div class="m">Feito por Daniel Nunes · Made in Portugal {FLAG}</div></footer>')
 
 def head(t, c):
-    return ('<!doctype html><html lang="pt"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="'
+    return ('<!doctype html><html lang="' + i18n.lang() + '"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="'
             + c["c_brand"] + '"><title>' + t + '</title>' + fav(c) + '<style>' + CSS + theme_css(c) + '</style></head><body>')
 
 def page(title, body, active, u):
@@ -371,11 +409,13 @@ def page(title, body, active, u):
     nav = "".join(f'<a class="nl{" on" if h == active else ""}" href="{h}"><svg viewBox="0 0 24 24">{IC[i]}</svg><span>{n}</span></a>' for h, n, i in NAV)
     adm = f'<a class="nl acct{" on" if active == "/admin" else ""}" href="/admin"><svg viewBox="0 0 24 24">{IC["shield"]}</svg><span>Admin</span></a>' if u["is_admin"] else ""
     madm = '<a class="btn" style="padding:4px 12px" href="/admin">Admin</a>' if u["is_admin"] else ""
+    nu = one("select count(*) from tickets where user_id=? and unread_user=1", (u["id"],))[0]
+    madm += f'<a class="btn" style="padding:4px 12px" href="/support">💬 {nu}</a>' if nu else ""
     acct = f'<a class="nl acct{" on" if active == "/settings" else ""}" href="/settings"><svg viewBox="0 0 24 24">{IC["gear"]}</svg><span>{e(u["name"] or u["username"])}</span></a>'
     top = (f'<div class="top"><a class="brand" href="/">{lg}{sn}</a><div style="display:flex;gap:10px;align-items:center">{madm}'
            f'<a class="me" href="/settings" aria-label="Conta">{e(ini(u["name"] or u["username"]))}</a></div></div>')
-    return (head(e(title) + " · " + sn, c) + f'<div class="shell"><nav class="side"><a class="brand" href="/">{lg}{sn}</a>{nav}<div class="sp"></div>{adm}{acct}</nav>'
-            f'<div>{top}<main class="main">{ad_html(c, "app")}{body}</main></div></body></html>')
+    return (head(eh(title) + " · " + sn, c) + f'<div class="shell"><nav class="side"><a class="brand" href="/">{lg}{sn}</a>{nav}<div class="sp"></div>{adm}{acct}</nav>'
+            f'<div>{top}<main class="main">{ad_html(c, "app")}{body}{foot(nu)}</main></div></body></html>')
 
 TL = ('<div class="tl"><div><i class="paid" style="left:2%;width:30%">Casamento</i><i class="inv" style="left:38%;width:24%">Conferência</i></div>'
       '<div><i class="todo" style="left:12%;width:26%">Videoclip</i><i class="paid" style="left:46%;width:40%">Festival · 3 dias</i></div>'
@@ -384,8 +424,20 @@ TL = ('<div class="tl"><div><i class="paid" style="left:2%;width:30%">Casamento<
 
 def auth_page(title, inner):
     c = cfg(); sn = e(c["site_name"]); lg = logo(c)
-    return (head(e(title) + " · " + sn, c) + f'<div class="auth"><section class="hero"><a class="brand" href="/">{lg}{sn}</a>'
-            f'<h1>{e(c["hero_title"])}</h1><p>{e(c["hero_text"])}</p>{TL}</section><section class="ap"><div class="ac">{inner}{ad_html(c, "auth")}</div></section></div></body></html>')
+    ht = eh(c["hero_title"]) if c["hero_title"] == DEFAULTS["hero_title"] else e(c["hero_title"])
+    hx = eh(c["hero_text"]) if c["hero_text"] == DEFAULTS["hero_text"] else e(c["hero_text"])
+    return (head(eh(title) + " · " + sn, c) + f'<div class="auth"><section class="hero"><a class="brand" href="/">{lg}{sn}</a>'
+            f'<h1>{ht}</h1><p>{hx}</p>{TL}</section><section class="ap"><div class="ac">{inner}{ad_html(c, "auth")}{foot()}</div></section></div></body></html>')
+
+def pub_page(title, body):
+    c = cfg(); sn = e(c["site_name"]); lg = logo(c)
+    return head(eh(title) + " · " + sn, c) + f'<div class="pub"><a class="brand" href="/">{lg}{sn}</a><main>{ad_html(c, "auth")}{body}{foot()}</main></div></body></html>'
+
+def shell(title, body, u, active=""): return page(title, body, active, u) if u else pub_page(title, body)
+
+def notify_admins(subject, text):
+    if smtp_ready():
+        for r in rows("select email from users where is_admin=1 and disabled=0"): mail_async(r["email"], subject, text)
 
 def fld(label, name, typ="text", val="", extra=""):
     return f'<label>{label}</label><input name="{name}" type="{typ}" value="{e(val)}" {extra}>'
@@ -404,7 +456,7 @@ def tog(r, nxt):
     return '<div class="tg">' + b("invoiced", "Faturada", r["invoice_date"], "f") + b("paid", "Paga", r["paid"], "p2") + "</div>"
 
 def ev_row(r, nxt):
-    meta = f'{drange(r["start_date"], r["end_date"])} · {e(r["cn"] or "sem cliente")}'
+    meta = f'{drange(r["start_date"], r["end_date"])} · {(e(r["cn"]) if r["cn"] else "sem cliente")}'
     if r["invoice_date"]: meta += f' · faturada {ds(r["invoice_date"])}'
     elif r["end_date"] < today().isoformat(): meta += ' · <em class="late">terminou, falta faturar</em>'
     return (f'<div class="er {state(r)}"><a class="eh" href="/event/{r["id"]}">{avatar(r["cn"] or "?", r["cl"])}<div><b>{e(r["title"])}</b><small>{meta}</small></div></a>'
@@ -430,7 +482,12 @@ class H(BaseHTTPRequestHandler):
 
     def https(self): return self.headers.get("X-Forwarded-Proto") == "https"
 
+    def pick_lang(self):
+        m = cookies.SimpleCookie(self.headers.get("Cookie", "")).get("lang")
+        return m.value if m and m.value in i18n.LANGS else i18n.best_accept(self.headers.get("Accept-Language"), cfg()["lang"])
+
     def out(self, body, code=200, ctype="text/html; charset=utf-8", hd=()):
+        if isinstance(body, str) and ctype.startswith("text/html"): body = i18n.finish(body)
         n = secrets.token_urlsafe(12); b = body if isinstance(body, bytes) else body.replace("__NONCE__", n).encode(); self.send_response(code)
         for k, v in (("Content-Type", ctype), ("Content-Length", str(len(b))), ("X-Frame-Options", "DENY"), ("X-Content-Type-Options", "nosniff"), ("Referrer-Policy", "same-origin"),
                      ("Content-Security-Policy", f"default-src 'self'; style-src 'unsafe-inline'; script-src 'nonce-{n}'; img-src 'self' https: data:; form-action 'self'; frame-ancestors 'none'"), *hd):
@@ -444,12 +501,20 @@ class H(BaseHTTPRequestHandler):
 
     def do_GET(self):
         u_ = urlparse(self.path); q = parse_qs(u_.query); p = u_.path; g = lambda k, d="": q.get(k, [d])[0]
+        i18n.set_lang(self.pick_lang(), self.path)
+        if p == "/lang":
+            nx = g("next", "/"); nx = nx if nx.startswith("/") and not nx.startswith("//") else "/"
+            ck = f"lang={g('l')}; Max-Age=31536000; Path=/; SameSite=Lax" + ("; Secure" if self.https() else "")
+            return self.go(nx, [("Set-Cookie", ck)] if g("l") in i18n.LANGS else [])
         if p == "/calendar.ics": return self.ics(g("k"))
         if p in ("/favicon.svg", "/favicon.ico", "/favicon-32.png", "/apple-touch-icon.png"): return self.icon(p)
         u = self.user()
         if p in ("/login", "/register", "/forgot", "/reset"):
             if u: return self.go("/")
             return self.out({"/login": lambda: self.login_page(ok=g("ok")), "/register": self.register_page, "/forgot": self.forgot_page, "/reset": lambda: self.reset_page(g("t"))}[p]())
+        if p == "/about" or p.startswith("/support"):
+            try: return self.out(self.about(u) if p == "/about" else self.support_get(u, p, g))
+            except (ValueError, KeyError, IndexError): return self.out(shell("Não encontrado", "<h1>Página não encontrada</h1>", u), 404)
         if not u: return self.go("/login")
         parts = p.strip("/").split("/")
         try:
@@ -466,6 +531,7 @@ class H(BaseHTTPRequestHandler):
         self.out(page("Não encontrado", "<h1>Página não encontrada</h1>", "", u), 404)
 
     def do_POST(self):
+        i18n.set_lang(self.pick_lang(), "/")
         org, sf = self.headers.get("Origin"), self.headers.get("Sec-Fetch-Site")
         hosts = (self.headers.get("Host"), self.headers.get("X-Forwarded-Host"))
         if sf == "cross-site" or (not sf and org not in (None, "null") and urlparse(org).netloc not in hosts): return self.out("Pedido recusado", 403, "text/plain")
@@ -473,6 +539,9 @@ class H(BaseHTTPRequestHandler):
         n = int(self.headers.get("Content-Length", 0) or 0)
         self.fl = parse_qs(self.rfile.read(min(n, 200000)).decode(), keep_blank_values=True); f = {k: v[0] for k, v in self.fl.items()}
         p = urlparse(self.path).path; parts = p.strip("/").split("/")
+        if p.startswith("/support"):
+            try: return self.support_post(self.user(), p, f)
+            except (ValueError, KeyError, IndexError): return self.out(shell("Não encontrado", "<h1>Página não encontrada</h1>", self.user()), 404)
         pub = {"/login": self.do_login, "/register": self.do_register, "/forgot": self.do_forgot, "/reset": self.do_reset}
         if p in pub: return pub[p](f)
         u = self.user()
@@ -512,7 +581,7 @@ class H(BaseHTTPRequestHandler):
         msg = f'<p class="msg err">{err}</p>' if err else '<p class="msg ok">Palavra-passe alterada. Já podes entrar.</p>' if ok == "reset" else ""
         return auth_page("Entrar", f'<h1>Entrar</h1><p class="sub">Bem-vindo de volta.</p>{msg}<form class="f" method="post" action="/login">'
             + fld("Utilizador ou email", "u", extra='autocomplete="username" required autofocus') + fld("Palavra-passe", "p", "password", extra='autocomplete="current-password" required')
-            + '<p><button class="p" style="width:100%">Entrar</button></p></form><p class="l2"><a href="/forgot">Esqueci-me da palavra-passe</a></p><p class="l2 m">Ainda não tens conta? <a href="/register">Criar conta</a></p>')
+            + '<p><button class="p" style="width:100%">Entrar</button></p></form><p class="l2"><a href="/forgot">Esqueci-me da palavra-passe</a></p><p class="l2 m">Ainda não tens conta? <a href="/register">Criar conta</a></p>' + SUPBTN)
 
     def do_login(self, f):
         ip = self.client_address[0]; n, t = self.fails.get(ip, (0, 0))
@@ -530,7 +599,7 @@ class H(BaseHTTPRequestHandler):
         return auth_page("Criar conta", '<h1>Criar conta</h1><p class="sub">Demora menos de um minuto.</p>' + (f'<p class="msg err">{err}</p>' if err else "") + '<form class="f" method="post" action="/register">'
             + fld("Utilizador", "u", val=v.get("u", ""), extra='autocomplete="username" required autofocus') + fld("Email (para recuperar a palavra-passe)", "email", "email", v.get("email", ""), 'autocomplete="email" required')
             + fld("Palavra-passe (mínimo 8 caracteres)", "p", "password", extra='autocomplete="new-password" minlength="8" required') + fld("Repetir palavra-passe", "p2", "password", extra='autocomplete="new-password" minlength="8" required')
-            + inv + '<p><button class="p" style="width:100%">Criar conta e entrar</button></p></form><p class="l2 m">Já tens conta? <a href="/login">Entrar</a></p>')
+            + inv + '<p><button class="p" style="width:100%">Criar conta e entrar</button></p></form><p class="l2 m">Já tens conta? <a href="/login">Entrar</a></p>' + SUPBTN)
 
     def do_register(self, f):
         v = {"u": f.get("u", "").strip(), "email": f.get("email", "").strip()}; err = ""
@@ -547,13 +616,13 @@ class H(BaseHTTPRequestHandler):
                 uid = run("insert into users(username,email,name,pw,ics,created,is_admin) values(?,?,?,?,?,?,?)", (v["u"], v["email"], v["u"], hash_pw(f["p"]), secrets.token_hex(20), today().isoformat(), first))
             except sqlite3.IntegrityError: err = "Esse utilizador ou email já está registado."
         if err: return self.out(self.register_page(err, v), 400)
-        mail_async(v["email"], f"Bem-vindo à {SN()}", f"Olá {v['u']},\n\nA tua conta na {SN()} foi criada com sucesso.\n\nUtilizador: {v['u']}\n" + (f"Entrar: {BASE_URL}\n" if BASE_URL else "") + "\nSe não foste tu a criar esta conta, ignora este email.")
+        mail_async(v["email"], i18n.mail("welcome_s", site=SN()), i18n.mail("welcome_b", name=v["u"], site=SN(), user=v["u"], enter=i18n.mail("enter", url=BASE_URL) if BASE_URL else ""))
         self.go("/", [session_cookie(one("select * from users where id=?", (uid,)), self.https())])
 
     def forgot_page(self, sent=False):
         if sent: return auth_page("Recuperar", '<h1>Verifica o teu email</h1><p class="sub">Se esse email estiver registado, enviámos um link para definires uma nova palavra-passe. O link é válido durante 1 hora.</p><p class="l2"><a href="/login">Voltar a entrar</a></p>')
         return auth_page("Recuperar", '<h1>Recuperar palavra-passe</h1><p class="sub">Indica o email da tua conta.</p><form class="f" method="post" action="/forgot">' + fld("Email", "email", "email", extra="required autofocus")
-            + '<p><button class="p" style="width:100%">Enviar link</button></p></form><p class="l2"><a href="/login">Voltar</a></p>')
+            + '<p><button class="p" style="width:100%">Enviar link</button></p></form><p class="l2"><a href="/login">Voltar</a></p>' + SUPBTN)
 
     def do_forgot(self, f):
         ip = "f" + self.client_address[0]; n, t = self.fails.get(ip, (0, 0))
@@ -564,7 +633,7 @@ class H(BaseHTTPRequestHandler):
             tok = secrets.token_urlsafe(32); run("delete from resets where user_id=? or exp<?", (u["id"], time.time()))
             run("insert into resets values(?,?,?)", (hashlib.sha256(tok.encode()).hexdigest(), u["id"], int(time.time()) + 3600))
             if BASE_URL and smtp_ready():
-                mail_async(u["email"], f"Recuperar palavra-passe · {SN()}", f"Olá {u['name']},\n\nPara definires uma nova palavra-passe abre este link (válido 1 hora):\n{BASE_URL}/reset?t={tok}\n\nSe não pediste isto, ignora este email.")
+                mail_async(u["email"], i18n.mail("reset_s", site=SN()), i18n.mail("reset_b", name=u["name"], url=f"{BASE_URL}/reset?t={tok}"))
             else: print(f"[RECUPERAÇÃO] email/BASE_URL não configurado. Link para {u['username']}: http://{self.headers.get('Host')}/reset?t={tok}", flush=True)
         self.out(self.forgot_page(True))
 
@@ -587,13 +656,15 @@ class H(BaseHTTPRequestHandler):
         self.out(png_icon(size, tuple(c[k] for k in COLOR_KEYS)), 200, "image/png", hd)
 
     # ---- admin
-    TABS = [("/admin", "Resumo"), ("/admin/users", "Utilizadores"), ("/admin/site", "Site"), ("/admin/ads", "Publicidade"), ("/admin/db", "Base de dados")]
+    TABS = [("/admin", "Resumo"), ("/admin/users", "Utilizadores"), ("/admin/site", "Site"), ("/admin/ads", "Publicidade"), ("/admin/support", "Suporte"), ("/admin/db", "Base de dados")]
     FLASH = {"texts": "Textos e registo guardados.", "colors": "Cores guardadas.", "reset": "Cores repostas.", "ads": "Publicidade guardada.", "user": "Dados guardados.",
-             "pw": "Palavra-passe definida. A pessoa tem de entrar de novo.", "ics": "Link do calendário renovado.", "state": "Estado atualizado.", "snap": "Backup criado.", "newadmin": "Administrador adicionado."}
+             "pw": "Palavra-passe definida. A pessoa tem de entrar de novo.", "ics": "Link do calendário renovado.", "state": "Estado atualizado.", "snap": "Backup criado.", "newadmin": "Administrador adicionado.",
+             "reply": "Resposta enviada.", "closed": "Conversa fechada.", "reopened": "Conversa reaberta.", "deleted": "Conversa apagada."}
 
     def apage(self, u, tab, body, ok="", err=""):
-        chips = "".join(f'<a class="{"on" if h == tab else ""}" href="{h}">{n}</a>' for h, n in self.TABS)
-        m = f'<p class="msg ok">{e(self.FLASH[ok])}</p>' if ok in self.FLASH else (f'<p class="msg err">{e(err)}</p>' if err else "")
+        ns = one("select count(*) from tickets where unread_admin=1")[0]
+        chips = "".join(f'<a class="{"on" if h == tab else ""}" href="{h}">{n}{f" <span class=\"bd s\">{ns}</span>" if ns and h == "/admin/support" else ""}</a>' for h, n in self.TABS)
+        m = f'<p class="msg ok">{eh(self.FLASH[ok])}</p>' if ok in self.FLASH else (f'<p class="msg err">{eh(err)}</p>' if err else "")
         return page("Admin", f'<div class="bar-h"><div><h1>Admin</h1><p class="sub" style="margin:0">Gestão do site, das contas e dos dados.</p></div></div><div class="chips">{chips}</div>{m}{body}', "/admin", u)
 
     def send_file(self, path):
@@ -608,6 +679,8 @@ class H(BaseHTTPRequestHandler):
         if p == "/admin/site": return self.out(self.a_site(u, g("ok")))
         if p == "/admin/ads": return self.out(self.a_ads(u, g("ok")))
         if p == "/admin/db": return self.out(self.a_db(u, g("ok"), g("t")))
+        if p == "/admin/support": return self.out(self.a_support(u, g("f", "open"), g("ok")))
+        if len(parts) == 3 and parts[1] == "support": return self.out(self.a_ticket(u, parts[2], g("ok")))
         if p == "/admin/backup.db": return self.send_file(make_backup("manual"))
         if len(parts) == 3 and parts[1] == "user": return self.out(self.a_user(u, parts[2], g("ok")))
         if len(parts) == 3 and parts[1] == "backups" and re.match(BK_RE, parts[2]): return self.send_file(os.path.join(BACKUP_DIR, parts[2]))
@@ -624,17 +697,19 @@ class H(BaseHTTPRequestHandler):
         w = []
         if not smtp_ready(): w.append("O envio de emails está desligado (define SMTP_USER e SMTP_PASSWORD no Portainer).")
         if not BASE_URL: w.append("BASE_URL não está definido: os links nos emails não funcionam.")
+        ns = q("select count(*) from tickets where unread_admin=1")
         if c["reg_open"] == "1" and not c["invite"]: w.append("Qualquer pessoa com o endereço do site pode criar conta. Define um código de convite em Site.")
-        wh = ("<ul style='margin:0;padding-left:20px'>" + "".join(f"<li>{e(x)}</li>" for x in w) + "</ul>") if w else '<p class="m" style="margin:0">Tudo em ordem.</p>'
+        wl = [f"<li>{eh(x)}</li>" for x in w] + ([f'<li><a href="/admin/support">{eh("Mensagens de suporte por ler:")} <b>{ns}</b></a></li>'] if ns else [])
+        wh = ("<ul style='margin:0;padding-left:20px'>" + "".join(wl) + "</ul>") if wl else '<p class="m" style="margin:0">Tudo em ordem.</p>'
         rec = "".join(f'<div class="er"><a class="eh" href="/admin/user/{x["id"]}"><span class="av">{e(ini(x["name"] or x["username"]))}</span><div><b>{e(x["name"] or x["username"])}</b>'
-                      f'<small>{e(x["email"])} · registo {e(x["created"])}</small></div></a><span class="m">{e(x["last_seen"] or "nunca entrou")}</span></div>' for x in rows("select * from users order by id desc limit 6"))
+                      f'<small>{e(x["email"])} · registo {e(x["created"])}</small></div></a><span class="m">{e(x["last_seen"]) if x["last_seen"] else "nunca entrou"}</span></div>' for x in rows("select * from users order by id desc limit 6"))
         return self.apage(u, "/admin", f'{strip}<h2>Avisos</h2><div class="card">{wh}</div><h2>Últimas contas</h2><div class="list">{rec}</div><p><a class="btn" href="/admin/users">Ver todas as contas</a></p>')
 
     def a_users(self, u, ok=""):
         us = rows("select u.*, (select count(*) from events where user_id=u.id) ne, (select count(*) from clients where user_id=u.id) nc from users u order by id")
         bd = lambda x: ('<span class="bd a">Admin</span> ' if x["is_admin"] else "") + ('<span class="bd s">Suspensa</span>' if x["disabled"] else "")
         tr = "".join(f'<tr><td><a href="/admin/user/{x["id"]}"><b>{e(x["name"] or x["username"])}</b></a><br><span class="m">@{e(x["username"])}</span></td><td class="l">{e(x["email"])}</td>'
-                     f'<td>{e(x["created"])}</td><td>{e(x["last_seen"] or "nunca")}</td><td>{x["ne"]}</td><td>{x["nc"]}</td><td>{bd(x)}</td></tr>' for x in us)
+                     f'<td>{e(x["created"])}</td><td>{e(x["last_seen"]) if x["last_seen"] else "nunca"}</td><td>{x["ne"]}</td><td>{x["nc"]}</td><td>{bd(x)}</td></tr>' for x in us)
         cand = "".join(f'<option value="{x["id"]}">{e(x["name"] or x["username"])} (@{e(x["username"])}) · {e(x["email"])}</option>' for x in us if not x["is_admin"] and not x["disabled"])
         adm = ", ".join(f'<a href="/admin/user/{x["id"]}"><b>{e(x["name"] or x["username"])}</b></a>' for x in us if x["is_admin"])
         addf = ('<form class="f card" method="post" action="/admin/users/promote"><h2>Administradores</h2><p class="m">Atuais: ' + adm + '. Os administradores veem e gerem todas as contas e dados. '
@@ -656,18 +731,19 @@ class H(BaseHTTPRequestHandler):
         return self.apage(u, "/admin/users", (
             f'<p><a href="/admin/users" class="m">‹ Todas as contas</a></p>{lk}'
             f'<div class="card"><div class="row2"><span class="av">{e(ini(t["name"] or t["username"]))}</span><div><b>{e(t["name"] or t["username"])}</b> {bdg}'
-            f'<div class="m">Registo {e(t["created"])} · último acesso {e(t["last_seen"] or "nunca")} · {pl(ne, "evento")} · {pl(nc, "cliente")}</div></div></div></div>'
+            f'<div class="m">Registo {e(t["created"])} · último acesso {e(t["last_seen"]) if t["last_seen"] else "nunca"} · {pl(ne, "evento")} · {pl(nc, "cliente")}</div></div></div></div>'
             f'<form class="f card" method="post" action="{base}/save"><h2>Dados da conta</h2>' + fld("Utilizador", "username", val=t["username"], extra="required") + fld("Nome", "name", val=t["name"], extra="required")
             + fld("Email", "email", "email", t["email"], "required") + fld("Telemóvel", "phone", "tel", t["phone"] or "") + '<p><button class="p">Guardar</button></p></form>'
             f'<div class="card"><h2>Acesso</h2><div class="row2">{btn("link", "Gerar link de recuperação")}{btn("ics", "Renovar link do calendário")}</div>'
             f'<form class="f" method="post" action="{base}/password" style="margin-top:14px"><label>Definir nova palavra-passe (mínimo 8)</label><div class="row2"><input name="p" type="text" minlength="8" autocomplete="off" required style="flex:1;min-width:200px"><button>Definir</button></div></form></div>'
             f'<div class="card"><h2>Estado</h2><div class="row2">{btn("admin", "Remover admin" if t["is_admin"] else "Tornar admin")}{btn("disable", "Reativar conta" if t["disabled"] else "Suspender conta", "d")}</div>'
             f'<p class="m">Uma conta suspensa não consegue entrar, mas os dados ficam guardados.</p></div>'
-            f'<details><summary>Apagar conta e todos os dados</summary><form class="f" method="post" action="{base}/delete"><p class="m">Apaga a conta, {pl(ne, "evento")} e {pl(nc, "cliente")}. Não dá para desfazer (só com um backup). '
+            f'<details><summary>Apagar conta e todos os dados</summary><form class="f" method="post" action="{base}/delete"><p class="m">Apaga a conta e os dados associados: {pl(ne, "evento")} · {pl(nc, "cliente")}. Não dá para desfazer (só com um backup). '
             f'Escreve <b>{e(t["username"])}</b> para confirmar.</p><input name="confirm" autocomplete="off" required><p><button class="d">Apagar definitivamente</button></p></form></details>'), ok, err)
 
     def a_site(self, u, ok=""):
         c = cfg(); ck = lambda k: "checked" if c[k] == "1" else ""
+        lopts = "".join(f'<option value="{k}"{" selected" if cfg()["lang"] == k else ""}>{v}</option>' for k, v in i18n.LANGS.items())
         presets = [("Azul", "#3b4cdb,#e5484d,#f0a020,#2fa56b"), ("Esmeralda", "#0f766e,#e5484d,#f0a020,#2fa56b"), ("Violeta", "#7c3aed,#e11d48,#f59e0b,#16a34a"),
                    ("Laranja", "#ea580c,#dc2626,#ca8a04,#15803d"), ("Grafite", "#334155,#e5484d,#f0a020,#2fa56b")]
         pb = "".join(f'<button type="button" data-c="{v}">{n}</button>' for n, v in presets)
@@ -676,6 +752,7 @@ class H(BaseHTTPRequestHandler):
         return self.apage(u, "/admin/site", (
             '<form class="f card" method="post" action="/admin/site/texts"><h2>Nomes e textos</h2>' + fld("Nome do site", "site_name", val=c["site_name"], extra='maxlength="40" required')
             + fld("Título da página de entrada", "hero_title", val=c["hero_title"], extra='maxlength="140"') + f'<label>Texto da página de entrada</label><textarea name="hero_text" rows="3" maxlength="300">{e(c["hero_text"])}</textarea>'
+            f'<label>Idioma por defeito</label><select name="lang">{lopts}</select><p class="m">Usado quando o browser do visitante não indica um idioma disponível.</p>'
             f'<label class="c" style="margin-top:16px"><input type="checkbox" name="reg_open" {ck("reg_open")}>Permitir que novas pessoas criem conta</label>'
             + fld("Código de convite (vazio = sem código)", "invite", val=c["invite"], extra='maxlength="60" autocomplete="off"') + '<p><button class="p">Guardar</button></p></form>'
             '<form class="f card" method="post" action="/admin/site/colors"><h2>Cores</h2><p class="m">Mudam em todo o site e no ícone do separador. O modo escuro ajusta-se sozinho.</p>'
@@ -717,19 +794,19 @@ class H(BaseHTTPRequestHandler):
             f'<div class="card" id="sql"><h2>Ver e editar dados</h2><p class="m">Tabelas (clica para ver as primeiras 100 linhas):</p><div class="chips">{chips}</div>'
             f'<form class="f" method="post" action="/admin/db/sql#sql"><textarea name="q" rows="4" class="mono" spellcheck="false">{e(q or "select id, username, email from users")}</textarea>'
             '<label class="c" style="margin-top:10px"><input type="checkbox" name="confirm">Confirmo que esta instrução pode alterar dados (é criado um backup antes)</label>'
-            '<p class="m">Exemplos: <code>update users set email=\'novo@exemplo.pt\' where id=2</code> · <code>update events set user_id=3 where id=10</code></p><p><button class="p">Executar</button></p></form>'
+            '<p class="m">Exemplos: <code>' + e("update users set email='novo@exemplo.pt' where id=2") + '</code> · <code>' + e("update events set user_id=3 where id=10") + '</code></p><p><button class="p">Executar</button></p></form>'
             + (f'<p class="msg {"err" if info.startswith(("Erro", "Esta")) else "ok"}">{e(info)}</p>' if info else "") + sql_table(cols, data or []) + '</div>'
             '<script nonce="__NONCE__">document.getElementById("rf").onsubmit=function(ev){ev.preventDefault();var f=document.getElementById("rfile").files[0],b=document.getElementById("rb");if(!f)return;'
-            'if(!confirm("Isto substitui TODA a base de dados atual pela do ficheiro. Continuar?"))return;b.disabled=true;b.textContent="A restaurar...";'
-            'fetch("/admin/db/restore",{method:"POST",body:f,headers:{"Content-Type":"application/octet-stream"}}).then(function(r){return r.text().then(function(t){if(r.ok){location.href="/login"}else{alert(t);b.disabled=false;b.textContent="Restaurar"}})})'
-            '.catch(function(){alert("Falhou o envio do ficheiro.");b.disabled=false;b.textContent="Restaurar"})};</script>'), ok, err)
+            'if(!confirm("' + tx("Isto substitui TODA a base de dados atual pela do ficheiro. Continuar?") + '"))return;b.disabled=true;b.textContent="' + tx("A restaurar...") + '";'
+            'fetch("/admin/db/restore",{method:"POST",body:f,headers:{"Content-Type":"application/octet-stream"}}).then(function(r){return r.text().then(function(t){if(r.ok){location.href="/login"}else{alert(t);b.disabled=false;b.textContent="' + tx("Restaurar") + '"}})})'
+            '.catch(function(){alert("' + tx("Falhou o envio do ficheiro.") + '");b.disabled=false;b.textContent="' + tx("Restaurar") + '"})};</script>'), ok, err)
 
     def admin_post(self, u, p, parts, f):
         if not u["is_admin"]: return self.out(page("Não encontrado", "<h1>Página não encontrada</h1>", "", u), 404)
         yes = lambda k: "1" if f.get(k) else "0"
         if p == "/admin/site/texts":
             set_cfg({"site_name": f.get("site_name", "").strip()[:40] or DEFAULTS["site_name"], "hero_title": f.get("hero_title", "").strip()[:140] or DEFAULTS["hero_title"],
-                     "hero_text": f.get("hero_text", "").strip()[:300] or DEFAULTS["hero_text"], "reg_open": yes("reg_open"), "invite": f.get("invite", "").strip()[:60]})
+                     "hero_text": f.get("hero_text", "").strip()[:300] or DEFAULTS["hero_text"], "reg_open": yes("reg_open"), "invite": f.get("invite", "").strip()[:60], "lang": f.get("lang") if f.get("lang") in i18n.LANGS else "pt"})
             return self.go("/admin/site?ok=texts")
         if p == "/admin/site/colors":
             if not all(HEX.match(f.get(k, "")) for k in COLOR_KEYS): return self.out(self.apage(u, "/admin/site", "", err="Cor inválida."), 400)
@@ -744,6 +821,22 @@ class H(BaseHTTPRequestHandler):
             t = one("select * from users where id=? and disabled=0", (f.get("uid") or 0,))
             if t: run("update users set is_admin=1 where id=?", (t["id"],)); return self.go("/admin/users?ok=newadmin")
             return self.go("/admin/users")
+        if len(parts) == 4 and parts[1] == "support":
+            t = one("select * from tickets where id=?", (parts[2],))
+            if not t: return self.go("/admin/support")
+            act, base = parts[3], f"/admin/support/{t['id']}"
+            if act == "reply":
+                body = f.get("body", "").strip()[:3000]
+                if not body: return self.out(self.a_ticket(u, t["id"], err="Escreve a resposta."), 400)
+                now = now_str(); run("insert into tmsgs(ticket_id,from_admin,body,created) values(?,?,?,?)", (t["id"], 1, body, now))
+                run("update tickets set updated=?, unread_user=1, unread_admin=0 where id=?", (now, t["id"]))
+                if smtp_ready() and BASE_URL:
+                    mail_async(t["email"], i18n.mail("reply_s", t["lang"], site=SN()), i18n.mail("reply_b", t["lang"], name=t["name"], subject=t["subject"], reply=body, url=f"{BASE_URL}/support/t/{t['token']}"))
+                return self.go(base + "?ok=reply")
+            if act == "close":
+                run("update tickets set status=? where id=?", ("open" if t["status"] == "closed" else "closed", t["id"]))
+                return self.go(("/admin/support" if t["status"] != "closed" else base) + ("?ok=closed" if t["status"] != "closed" else "?ok=reopened"))
+            if act == "delete": run("delete from tickets where id=?", (t["id"],)); return self.go("/admin/support?ok=deleted")
         if p == "/admin/db/snapshot": make_backup("manual"); return self.go("/admin/db?ok=snap")
         if p == "/admin/db/sql":
             q = f.get("q", "").strip()
@@ -781,7 +874,7 @@ class H(BaseHTTPRequestHandler):
                 if me: return bad("Não podes apagar a tua própria conta aqui.")
                 if f.get("confirm", "").strip().lower() != t["username"].lower(): return bad("Para apagar, escreve exatamente o nome de utilizador.")
                 make_backup("predelete")
-                run("delete from events where user_id=?", (tid,)); run("delete from clients where user_id=?", (tid,)); run("delete from users where id=?", (tid,))
+                run("delete from events where user_id=?", (tid,)); run("delete from clients where user_id=?", (tid,)); run("delete from tickets where user_id=?", (tid,)); run("delete from users where id=?", (tid,))
                 return self.go("/admin/users")
         self.go("/admin")
 
@@ -826,7 +919,7 @@ class H(BaseHTTPRequestHandler):
         tile = lambda c, lab, val, sub: f'<div class="st" style="--c:{c}"><span>{lab}</span><b>{eur(val)}</b><span>{sub}</span></div>'
         return page("Início", f'<div class="bar-h"><div><h1>Olá, {e(u["name"] or u["username"])}</h1><p class="sub" style="margin:0">O ponto da situação.</p></div><a class="btn p" href="/event/new">Novo evento</a></div>'
             f'<div class="mn"><a class="btn" href="/?m={prev}">‹</a><b>{mn} {first.year}</b><a class="btn" href="/?m={nxt}">›</a><span class="m">aplica-se a Faturado e Recebido</span></div>'
-            '<div class="strip">' + tile("var(--todo)", "Por faturar", s(a), f"{len(a)} eventos") + tile("var(--inv)", "Faturado, por receber", s(b), f"{len(b)} eventos")
+            '<div class="strip">' + tile("var(--todo)", "Por faturar", s(a), pl(len(a), "evento")) + tile("var(--inv)", "Faturado, por receber", s(b), pl(len(b), "evento"))
             + tile("var(--brand)", f"Faturado em {mn}", fm, "pela data da fatura") + tile("var(--paid)", f"Recebido de {mn}", rm, "já pago") + '</div>'
             + "<h2>Por faturar</h2>" + lst(a, "/", "Nada por faturar. 🎬") + "<h2>Por receber</h2>" + lst(b, "/", "Nada por receber.") + "<h2>Próximos eventos</h2>" + lst(up, "/", "Sem eventos futuros."), "/", u)
 
@@ -845,20 +938,20 @@ class H(BaseHTTPRequestHandler):
         its = [(x["label"], x["amount"]) for x in rows("select * from items where event_id=? order by id", (i,))] if v else []
         sd = v["start_date"] if v else (okdate(date) or today().isoformat()); ed = v["end_date"] if v else sd
         cl = "".join(f'<option value="{c["id"]}" data-i="{e(" · ".join(x for x in (c["rate"], c["terms"]) if x))}" {"selected" if v and c["id"] == v["client_id"] else ""}>{e(c["name"])}</option>' for c in rows("select * from clients where user_id=? order by name", (u["id"],)))
-        rowsh = "".join(f'<div class="it"><input name="label" list="sug" value="{e(l)}" placeholder="Descrição"><input name="amt" inputmode="decimal" value="{f"{a:g}".replace(".", ",")}" placeholder="0,00"></div>' for l, a in (its or [("Diária", 0)]))
+        rowsh = "".join(f'<div class="it"><input name="label" list="sug" value="{e(l)}" placeholder="Descrição"><input name="amt" inputmode="decimal" value="{f"{a:g}".replace(".", dsep())}" placeholder="0{dsep()}00"></div>' for l, a in (its or [(tx("Diária"), 0)]))
         dele = f'<details><summary>Apagar evento</summary><form method="post" action="/event/{v["id"]}/delete"><p class="m">Esta ação não pode ser desfeita.</p><button class="d">Confirmar: apagar</button></form></details>' if v else ""
         ck = lambda x: "checked" if x else ""
         return page("Evento", f'<h1>{"Editar" if v else "Novo"} evento</h1><form class="f card" method="post" action="/event/save"><input type="hidden" name="id" value="{v["id"] if v else ""}">'
             + fld("Título", "title", val=v["title"] if v else "", extra="required" + ("" if v else " autofocus"))
             + f'<div class="g2"><div><label>Data de início</label><input type="date" id="sd" name="start" value="{sd}" required></div><div><label>Data de fim</label><input type="date" id="ed" name="end" value="{ed}" required></div></div>'
             f'<label>Cliente</label><select id="cs" name="client_id"><option value="">— sem cliente —</option>{cl}</select><div class="info" id="ci" hidden></div>'
-            f'<label>Valores</label><div id="items">{rowsh}</div><button type="button" id="add">+ Adicionar linha</button><div class="sum">Total<span id="tot">0,00 €</span></div>'
-            '<datalist id="sug"><option value="Diária"><option value="Meia diária"><option value="Hora extra"><option value="Aluguer de equipamento"><option value="Deslocação"><option value="Edição"></datalist>'
+            f'<label>Valores</label><div id="items">{rowsh}</div><button type="button" id="add">+ Adicionar linha</button><div class="sum">Total<span id="tot">0{dsep()}00 €</span></div>'
+            '<datalist id="sug">' + "".join(f'<option value="{eh(tx(x))}">' for x in ("Diária", "Meia diária", "Hora extra", "Aluguer de equipamento", "Deslocação", "Edição")) + '</datalist>'
             + f'<div class="g2"><div><label>Data da fatura (vazio = por faturar)</label><input type="date" name="invoice_date" value="{e(v["invoice_date"] if v else "")}"></div><div><label>N.º da fatura</label><input name="invoice_no" value="{e(v["invoice_no"] if v else "")}"></div></div>'
             f'<label class="c" style="margin-top:14px"><input type="checkbox" name="paid" {ck(v and v["paid"])}>Fatura paga (já recebi)</label><label>Notas</label><textarea name="notes" rows="3">{e(v["notes"] if v else "")}</textarea>'
             '<p><button class="p">Guardar</button> <a class="btn" href="/events">Cancelar</a></p></form>' + dele
-            + '<script nonce="__NONCE__">(function(){var L=document.getElementById("items"),T=document.getElementById("tot");function tot(){var s=0;L.querySelectorAll("[name=amt]").forEach(function(i){s+=parseFloat(i.value.replace(",","."))||0});T.textContent=s.toFixed(2).replace(".",",")+" €"}'
-            'L.addEventListener("input",tot);tot();document.getElementById("add").onclick=function(){var d=document.createElement("div");d.className="it";d.innerHTML=\'<input name="label" list="sug" placeholder="Descrição"><input name="amt" inputmode="decimal" placeholder="0,00">\';L.appendChild(d);d.firstChild.focus()};'
+            + '<script nonce="__NONCE__">(function(){var L=document.getElementById("items"),T=document.getElementById("tot");function tot(){var s=0;L.querySelectorAll("[name=amt]").forEach(function(i){s+=parseFloat(i.value.replace(",","."))||0});T.textContent=s.toFixed(2).replace(".","' + dsep() + '")+" €"}'
+            'L.addEventListener("input",tot);tot();document.getElementById("add").onclick=function(){var d=document.createElement("div");d.className="it";d.innerHTML=\'<input name="label" list="sug" placeholder="' + tx("Descrição") + '"><input name="amt" inputmode="decimal" placeholder="0' + dsep() + '00">\';L.appendChild(d);d.firstChild.focus()};'
             'var S=document.getElementById("cs"),I=document.getElementById("ci");function inf(){var o=S.options[S.selectedIndex];I.textContent=o.dataset.i||"";I.hidden=!o.dataset.i}S.onchange=inf;inf();'
             'var a=document.getElementById("sd"),b=document.getElementById("ed");a.onchange=function(){if(!b.value||b.value<a.value)b.value=a.value}})();</script>', "/events", u)
 
@@ -883,7 +976,7 @@ class H(BaseHTTPRequestHandler):
     # ---- clientes
     def clients(self, u):
         r = rows("select c.*, (select count(*) from events where client_id=c.id) n, (select coalesce(sum(amount),0) from events where client_id=c.id and paid=0 and invoice_date is not null) due from clients c where user_id=? order by name", (u["id"],))
-        l = "".join(f'<div class="er"><a class="eh" href="/client/{c["id"]}">{avatar(c["name"], c["logo"])}<div><b>{e(c["name"])}</b><small>{e(c["rate"]) or "sem valores definidos"} · {c["n"]} eventos</small></div></a><span class="amt">{eur(c["due"]) if c["due"] else ""}</span></div>' for c in r)
+        l = "".join(f'<div class="er"><a class="eh" href="/client/{c["id"]}">{avatar(c["name"], c["logo"])}<div><b>{e(c["name"])}</b><small>{e(c["rate"]) if c["rate"] else "sem valores definidos"} · {pl(c["n"], "evento")}</small></div></a><span class="amt">{eur(c["due"]) if c["due"] else ""}</span></div>' for c in r)
         return page("Clientes", f'<div class="bar-h"><h1>Clientes</h1><a class="btn p" href="/client/new">Novo cliente</a></div><div class="list">{l or "<div class=empty>Ainda sem clientes.</div>"}</div>', "/clients", u)
 
     def client_form(self, u, i):
@@ -949,7 +1042,7 @@ class H(BaseHTTPRequestHandler):
         chips = "".join(f'<a class="{"on" if x == y else ""}" href="/stats?y={x}">{x}</a>' for x in years)
         tile = lambda c, lab, val, sub="": f'<div class="st" style="--c:{c}"><span>{lab}</span><b>{val}</b><span>{sub}</span></div>'
         strip = '<div class="strip">' + tile("var(--brand)", "Faturado", eur(tf), f"média {eur(tf / len(act)) if act else '—'}/mês") + tile("var(--paid)", "Recebido", eur(tr), f"por receber {eur(tf - tr)}") \
-            + tile("var(--inv)", "Dias trabalhados", f"{td:g}", f"{sum(cnt)} eventos") + tile("var(--todo)", "Melhor mês", MES[best].capitalize() if best is not None else "—", eur(fat[best]) if best is not None else "") + '</div>'
+            + tile("var(--inv)", "Dias trabalhados", f"{td:g}", pl(sum(cnt), "evento")) + tile("var(--todo)", "Melhor mês", MES[best].capitalize() if best is not None else "—", eur(fat[best]) if best is not None else "") + '</div>'
         mt = "".join(f'<tr class="{"best" if k == best else "worst" if k == worst else ""}"><td>{MES[k].capitalize()}</td><td>{cnt[k]}</td><td>{eur(fat[k])}</td><td>{eur(rec[k])}</td><td>{eur(fat[k] - rec[k])}</td></tr>' for k in range(12))
         mx = max([c["v"] or 0 for c in cl] + [1]); mxd = max([c["d"] or 0 for c in cl] + [1])
         hb = lambda key, mxv, fmt: "".join(f'<div class="hb"><span>{e(c["name"])}</span><div class="t"><i style="width:{max(2, 100 * (c[key] or 0) / mxv):.0f}%"></i></div><b>{fmt(c[key])}</b></div>' for c in cl[:8]) or '<p class="m">Sem dados neste ano.</p>'
@@ -973,6 +1066,112 @@ class H(BaseHTTPRequestHandler):
             o += f'<text x="{L + k * sl + sl / 2:.1f}" y="{H - 7}" text-anchor="middle">{MES[k][:3]}</text>'
         return o + "</svg>"
 
+    # ---- sobre e suporte (público)
+    def about(self, u):
+        c = cfg(); sn = e(c["site_name"])
+        li = "".join(f"<li>{eh(x)}</li>" for x in ("Organizar eventos, incluindo trabalhos de vários dias e com vários valores.", "Guardar clientes com logótipo, valores acordados e condições de pagamento.",
+                     "Saber de relance o que falta faturar, o que falta receber e o que já recebeste, mês a mês.", "Ver estatísticas e gráficos do teu ano.", "Ligar o calendário ao Google Calendar."))
+        return shell("Sobre", f'<h1>Sobre {sn}</h1><p class="sub">Este site é um organizador pessoal para freelancers de audiovisual: guarda num só sítio os teus eventos, os teus clientes e o estado de cada fatura.</p>'
+            f'<div class="card ab"><h2 style="margin-top:0">O que podes fazer</h2><ul>{li}</ul></div>'
+            '<div class="card ab"><h2 style="margin-top:0">Importante</h2><p style="margin:0">Este site não emite faturas: a emissão continua a ser feita por ti, no teu programa de faturação. Aqui só acompanhas o estado de cada uma: por faturar, faturada ou paga.</p></div>'
+            '<div class="card ab"><h2 style="margin-top:0">Privacidade</h2><p style="margin:0">Cada conta vê apenas os seus próprios eventos e clientes. Os dados ficam no servidor onde este site está instalado.</p></div>'
+            f'<div class="card"><div class="cr"><b>Feito por Daniel Nunes</b><span class="m">·</span><b>Made in Portugal</b>{FLAG}</div></div>'
+            f'<div class="card"><p style="margin:0 0 12px">Precisas de ajuda ou tens uma sugestão?</p><a class="btn p" href="/support">Falar com o suporte</a></div>', u, "/about")
+
+    def support_get(self, u, p, g):
+        parts = p.strip("/").split("/")
+        if p == "/support": return self.support_page(u, ok=g("ok"))
+        if len(parts) == 3 and parts[1] == "t": return self.ticket_page(u, parts[2], g("ok"))
+        raise ValueError
+
+    def support_page(self, u, ok="", err="", v=None):
+        v = v or {}; fl = f'<p class="msg err">{eh(err)}</p>' if err else ""
+        if u:
+            ident = f'<p class="m">A escrever como <b>{e(u["name"] or u["username"])}</b> ({e(u["email"])}). As respostas aparecem aqui e também são enviadas para o teu email.</p>'
+        else:
+            ident = ('<p class="m">Ainda não tens conta ou não consegues entrar? Podes escrever na mesma: indica o teu email para podermos responder.</p>'
+                     + fld("O teu nome", "name", val=v.get("name", ""), extra='maxlength="60" required autocomplete="name"')
+                     + fld("O teu email (obrigatório, para podermos responder)", "email", "email", v.get("email", ""), 'maxlength="120" required autocomplete="email"'))
+        form = ('<form class="f card" method="post" action="/support">' + ident + fld("Assunto", "subject", val=v.get("subject", ""), extra='maxlength="120" required')
+                + f'<label>Mensagem</label><textarea name="body" rows="6" maxlength="3000" required>{e(v.get("body", ""))}</textarea>'
+                '<input type="text" name="website" tabindex="-1" autocomplete="off" aria-hidden="true" style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0">'
+                '<p><button class="p">Enviar mensagem</button></p></form>')
+        mine = ""
+        if u:
+            ts = rows("select * from tickets where user_id=? order by updated desc limit 30", (u["id"],))
+            items = "".join(f'<div class="er {"todo" if t["unread_user"] else ""}"><a class="eh" href="/support/t/{t["token"]}"><div><b>{e(t["subject"])}</b>'
+                            f'<small>{e(t["updated"])} · {"Fechada" if t["status"] == "closed" else "Aberta"}{" · <b>Nova resposta</b>" if t["unread_user"] else ""}</small></div></a></div>' for t in ts)
+            mine = f'<h2>As tuas mensagens</h2><div class="list">{items or "<div class=empty>Ainda não enviaste nenhuma mensagem.</div>"}</div>'
+        return shell("Suporte", f'<h1>Suporte</h1><p class="sub">Tens uma dúvida, um problema ou uma sugestão? Escreve-nos e respondemos o mais depressa possível.</p>{fl}{form}{mine}', u, "/support")
+
+    def ticket_page(self, u, tok, ok=""):
+        t = one("select * from tickets where token=?", (tok,))
+        if not t: raise ValueError
+        if t["unread_user"]: run("update tickets set unread_user=0 where id=?", (t["id"],))
+        ms = rows("select * from tmsgs where ticket_id=? order by id", (t["id"],))
+        bub = "".join(f'<div class="mg{" a" if m["from_admin"] else ""}"><small>{"Suporte" if m["from_admin"] else "Tu"} · {e(m["created"])}</small>{e(m["body"])}</div>' for m in ms)
+        fl = f'<p class="msg ok">{eh("Mensagem enviada. A resposta aparece nesta página e é enviada para o teu email. Guarda este endereço para voltares cá." if ok == "sent" else "Resposta enviada.")}</p>' if ok in ("sent", "reply") else ""
+        note = '<p class="m">Esta conversa está fechada. Se responderes, volta a abrir.</p>' if t["status"] == "closed" else ""
+        return (shell("Suporte", f'<p><a class="m" href="/support">‹ Suporte</a></p><h1>{e(t["subject"])}</h1><p class="sub">Conversa com o suporte</p>{fl}<div class="msgs">{bub}</div>{note}'
+            f'<form class="f card" method="post" action="/support/t/{e(tok)}/reply"><label>Responder</label><textarea name="body" rows="4" maxlength="3000" required></textarea>'
+            '<p><button class="p">Enviar resposta</button></p></form>', u, "/support"))
+
+    def support_post(self, u, p, f):
+        parts = p.strip("/").split("/"); ip = "s" + self.client_address[0]; n, t0 = self.fails.get(ip, (0, 0)); lim = n >= 8 and time.time() - t0 < 3600
+        host = BASE_URL or ("https://" if self.https() else "http://") + str(self.headers.get("Host"))
+        if p == "/support":
+            if f.get("website"): return self.go("/support")
+            if lim: return self.out(self.support_page(u, err="Demasiadas mensagens. Tenta mais tarde.", v=f), 429)
+            subj, body = f.get("subject", "").strip()[:120], f.get("body", "").strip()[:3000]
+            name, em, uid = ((u["name"] or u["username"]), u["email"], u["id"]) if u else (f.get("name", "").strip()[:60], f.get("email", "").strip()[:120], None)
+            if not subj or len(body) < 3 or not name or not re.match(EMAIL_RE, em): return self.out(self.support_page(u, err="Preenche o nome, um email válido, o assunto e a mensagem.", v=f), 400)
+            self.fails[ip] = (n + 1 if time.time() - t0 < 3600 else 1, time.time()); tok = secrets.token_urlsafe(18); now = now_str()
+            tid = run("insert into tickets(token,user_id,name,email,subject,lang,created,updated) values(?,?,?,?,?,?,?,?)", (tok, uid, name, em, subj, i18n.lang(), now, now))
+            run("insert into tmsgs(ticket_id,from_admin,body,created) values(?,?,?,?)", (tid, 0, body, now))
+            notify_admins(f"{SN()} · Nova mensagem de suporte", f"{name} <{em}>\nAssunto: {subj}\n\n{body}\n\n" + (f"Responder: {BASE_URL}/admin/support/{tid}\n" if BASE_URL else ""))
+            if BASE_URL: mail_async(em, i18n.mail("ack_s", site=SN()), i18n.mail("ack_b", name=name, subject=subj, url=f"{BASE_URL}/support/t/{tok}"))
+            return self.go(f"/support/t/{tok}?ok=sent")
+        if len(parts) == 4 and parts[1] == "t" and parts[3] == "reply":
+            t = one("select * from tickets where token=?", (parts[2],))
+            if not t: raise ValueError
+            body = f.get("body", "").strip()[:3000]
+            if len(body) < 1 or lim: return self.go(f"/support/t/{parts[2]}")
+            self.fails[ip] = (n + 1 if time.time() - t0 < 3600 else 1, time.time()); now = now_str()
+            run("insert into tmsgs(ticket_id,from_admin,body,created) values(?,?,?,?)", (t["id"], 0, body, now))
+            run("update tickets set status='open', updated=?, unread_admin=1 where id=?", (now, t["id"]))
+            notify_admins(f"{SN()} · Nova mensagem de suporte", f"{t['name']} <{t['email']}>\nAssunto: {t['subject']}\n\n{body}\n\n" + (f"Responder: {BASE_URL}/admin/support/{t['id']}\n" if BASE_URL else ""))
+            return self.go(f"/support/t/{parts[2]}?ok=reply")
+        raise ValueError
+
+    # ---- admin: suporte
+    def a_support(self, u, flt="open", ok=""):
+        flt = flt if flt in ("open", "closed", "all") else "open"
+        cond = {"open": "status='open'", "closed": "status='closed'", "all": "1=1"}[flt]
+        ts = rows(f"select t.*, (select body from tmsgs where ticket_id=t.id order by id desc limit 1) last, (select from_admin from tmsgs where ticket_id=t.id order by id desc limit 1) la "
+                  f"from tickets t where {cond} order by unread_admin desc, updated desc limit 200")
+        chips = "".join(f'<a class="{"on" if k == flt else ""}" href="/admin/support?f={k}">{n}</a>' for k, n in (("open", "Abertas"), ("closed", "Fechadas"), ("all", "Todos")))
+        def row(t):
+            bd = (' <span class="bd s">Nova</span>' if t["unread_admin"] else "") + (' <span class="bd a">Conta</span>' if t["user_id"] else ' <span class="bd">Visitante</span>') + (' <span class="bd">Fechada</span>' if t["status"] == "closed" else "")
+            return (f'<div class="er {"todo" if t["unread_admin"] else ""}"><a class="eh" href="/admin/support/{t["id"]}"><span class="av">{e(ini(t["name"]))}</span><div><b>{e(t["subject"])}</b>{bd}'
+                    f'<small>{e(t["name"])} · {e(t["email"])} · {e(t["updated"])}</small><small>{e((t["last"] or "")[:110])}</small></div></a></div>')
+        return self.apage(u, "/admin/support", f'<h2 style="margin-top:0">Mensagens de suporte</h2><div class="chips">{chips}</div><div class="list">{"".join(row(t) for t in ts) or "<div class=empty>Sem mensagens.</div>"}</div>', ok)
+
+    def a_ticket(self, u, tid, ok="", err=""):
+        t = one("select * from tickets where id=?", (tid,))
+        if not t: raise ValueError
+        run("update tickets set unread_admin=0 where id=?", (t["id"],))
+        ms = rows("select * from tmsgs where ticket_id=? order by id", (t["id"],)); base = f"/admin/support/{t['id']}"
+        host = BASE_URL or ("https://" if self.https() else "http://") + str(self.headers.get("Host"))
+        bub = "".join(f'<div class="mg{" a" if m["from_admin"] else ""}"><small>{"Suporte" if m["from_admin"] else e(t["name"])} · {e(m["created"])}</small>{e(m["body"])}</div>' for m in ms)
+        who = ('<span class="bd a">Conta</span> ' if t["user_id"] else '<span class="bd">Visitante</span> ') + ('<span class="bd">Fechada</span>' if t["status"] == "closed" else "")
+        btn = lambda act, label, cls="": f'<form method="post" action="{base}/{act}"><button class="{cls}">{label}</button></form>'
+        return self.apage(u, "/admin/support", (
+            f'<p><a href="/admin/support" class="m">‹ Todas as mensagens</a></p><div class="card"><b>{e(t["subject"])}</b> {who}<div class="m">{e(t["name"])} · <a href="mailto:{e(t["email"])}">{e(t["email"])}</a> · {e(t["created"])} · {e(i18n.LANGS.get(t["lang"], ""))}</div></div>'
+            f'<div class="msgs">{bub}</div><form class="f card" method="post" action="{base}/reply"><label>Resposta</label><textarea name="body" rows="5" maxlength="3000" required></textarea>'
+            f'<p class="m">A resposta aparece na página da conversa e é enviada por email para {e(t["email"])} (se o envio de emails estiver ativo).</p><p><button class="p">Enviar resposta</button></p></form>'
+            f'<div class="card"><b>Link da conversa (para enviares manualmente, se precisares)</b><input readonly value="{e(host + "/support/t/" + t["token"])}" style="width:100%;margin-top:8px;padding:10px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--ink)"></div>'
+            f'<div class="row2">{btn("close", "Reabrir conversa" if t["status"] == "closed" else "Fechar conversa")}{btn("delete", "Apagar conversa", "d")}</div>'), ok, err)
+
     # ---- definições
     def settings(self, u, ok="", err=""):
         proto = "https" if self.https() else "http"; url = f'{BASE_URL or proto + "://" + str(self.headers.get("Host"))}/calendar.ics?k={u["ics"]}'
@@ -983,6 +1182,7 @@ class H(BaseHTTPRequestHandler):
             '<form class="f card" method="post" action="/settings/password"><h2>Alterar palavra-passe</h2>' + fld("Palavra-passe atual", "old", "password", extra='autocomplete="current-password" required')
             + fld("Nova palavra-passe (mínimo 8)", "p", "password", extra='autocomplete="new-password" minlength="8" required') + fld("Repetir nova palavra-passe", "p2", "password", extra='autocomplete="new-password" minlength="8" required') + '<p><button class="p">Alterar palavra-passe</button></p></form>'
             f'<div class="card"><h2>Google Calendar</h2><p class="m">Em Google Calendar → Outras agendas → A partir do URL, cola este link (só leitura). O Google precisa de conseguir aceder ao endereço, por isso só funciona se o site estiver acessível pela internet em HTTPS. Não partilhes este link.</p><input readonly value="{e(url)}" style="width:100%;padding:10px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--ink)" id="icsurl"><form method="post" action="/settings/ics" style="margin-top:12px"><button>Gerar novo link</button> <span class="m">O link antigo deixa de funcionar.</span></form></div>'
+            f'<div class="card"><h2>Idioma</h2><p class="m">Escolhe o idioma do site.</p>{langbar(True)}</div>'
             '<form method="post" action="/logout"><button>Terminar sessão</button></form><script nonce="__NONCE__">document.getElementById("icsurl").onclick=function(){this.select()}</script>', "/settings", u)
 
     def save_profile(self, u, f):

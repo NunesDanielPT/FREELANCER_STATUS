@@ -27,5 +27,14 @@ Sem `SMTP_USER`/`SMTP_PASSWORD`/`BASE_URL`, o link de recuperação aparece nos 
 ## Backup
 docker run --rm -v claquete_data:/data -v $PWD:/b alpine tar czf /b/backup.tgz -C /data .
 
+## Idiomas
+Português, English, Español, Français e Italiano. O site usa o idioma do browser do visitante (ou o que ele escolher no rodapé / em Conta) e, se não houver correspondência, o idioma por defeito (Admin > Site).
+As traduções estão em `i18n.py`: para corrigir uma frase edita a linha respetiva (português, inglês, espanhol, francês, italiano). O texto escrito pelos utilizadores nunca é traduzido.
+
+## Suporte e Sobre
+- Botão **Suporte** nas páginas de entrada/registo (visitantes: nome e email obrigatórios) e no rodapé; quem tem conta usa os dados da conta.
+- As mensagens chegam a **Admin > Suporte** (com contador de novas). Respondes lá; a resposta aparece na conversa do utilizador (ou no link da conversa, para visitantes) e é enviada por email se o SMTP estiver configurado. Também recebes um email de cada mensagem nova.
+- Página **Sobre** (`/about`) explica para que serve o site e quem o fez.
+
 ## Admin
-A primeira conta registada é administradora. Ícone **Admin** no menu: resumo e avisos, contas (editar email, repor password, suspender, apagar), nome/cores/textos do site, publicidade, backups (automático diário em `/data/backups`), restauro e consola SQL.
+A primeira conta registada é administradora. Ícone **Admin** no menu: resumo e avisos, contas (editar email, repor password, suspender, apagar), mensagens de suporte, nome/cores/textos do site, publicidade, backups (automático diário em `/data/backups`), restauro e consola SQL.

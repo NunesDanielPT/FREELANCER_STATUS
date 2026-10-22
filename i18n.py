@@ -1,0 +1,550 @@
+"""Traducoes da Claquete: pt (original), en, es, fr, it.
+
+Como funciona: o codigo escreve as paginas em portugues. Antes de enviar, o servidor troca cada frase
+portuguesa pela traducao (ver tabela P). O texto escrito pelos utilizadores (nomes, notas, titulos...)
+vem marcado com M0/M1 e nunca e traduzido.
+
+Para acrescentar ou corrigir uma traducao basta editar a linha correspondente em P:
+(portugues, ingles, espanhol, frances, italiano). A frase em portugues tem de ser igual a do codigo.
+"""
+import re, threading
+
+LANGS = {"pt": "Português", "en": "English", "es": "Español", "fr": "Français", "it": "Italiano"}
+ORDER = ("pt", "en", "es", "fr", "it")
+M0, M1 = "", ""
+_loc = threading.local()
+
+
+def set_lang(l, path="/"):
+    _loc.lang = l if l in LANGS else "pt"; _loc.path = path
+def lang(): return getattr(_loc, "lang", "pt")
+def path(): return getattr(_loc, "path", "/")
+
+
+def best_accept(header, default="pt"):
+    """Escolhe o idioma a partir do cabecalho Accept-Language do browser."""
+    for part in (header or "").split(","):
+        code = part.split(";")[0].strip().lower().split("-")[0]
+        if code in LANGS: return code
+    return default
+
+
+# (pt, en, es, fr, it)
+P = [
+    # --- entrada / hero
+    ("Sabe sempre o que falta faturar e o que falta receber.", "Always know what still needs invoicing and what you are still owed.", "Sabe siempre qué falta por facturar y qué te falta por cobrar.", "Sachez toujours ce qu’il reste à facturer et ce qu’il vous reste à encaisser.", "Sai sempre cosa resta da fatturare e cosa devi ancora incassare."),
+    ("Eventos, clientes e faturas num só sítio, feito para freelancers de audiovisual. Não emite faturas: só te ajuda a não perder nenhuma.", "Events, clients and invoices in one place, made for audiovisual freelancers. It does not issue invoices: it just helps you not to lose track of any.", "Eventos, clientes y facturas en un solo sitio, pensado para freelancers del audiovisual. No emite facturas: solo te ayuda a no perder ninguna.", "Événements, clients et factures au même endroit, conçu pour les freelances de l’audiovisuel. Il n’émet pas de factures : il vous aide seulement à n’en perdre aucune.", "Eventi, clienti e fatture in un unico posto, pensato per i freelance dell’audiovisivo. Non emette fatture: ti aiuta solo a non perderne nessuna."),
+    ("Casamento", "Wedding", "Boda", "Mariage", "Matrimonio"),
+    ("Conferência", "Conference", "Conferencia", "Conférence", "Conferenza"),
+    ("Videoclip", "Music video", "Videoclip", "Clip vidéo", "Videoclip"),
+    ("Festival · 3 dias", "Festival · 3 days", "Festival · 3 días", "Festival · 3 jours", "Festival · 3 giorni"),
+    ("Spot", "Commercial", "Spot", "Spot", "Spot"),
+    ("Institucional", "Corporate", "Institucional", "Institutionnel", "Istituzionale"),
+    ("por faturar", "to invoice", "por facturar", "à facturer", "da fatturare"),
+    ("faturada", "invoiced", "facturada", "facturée", "fatturata"),
+    ("paga", "paid", "pagada", "payée", "pagata"),
+    # --- menu e títulos
+    ("Início", "Home", "Inicio", "Accueil", "Home"),
+    ("Calendário", "Calendar", "Calendario", "Calendrier", "Calendario"),
+    ("Eventos", "Events", "Eventos", "Événements", "Eventi"),
+    ("Clientes", "Clients", "Clientes", "Clients", "Clienti"),
+    ("Estatísticas", "Statistics", "Estadísticas", "Statistiques", "Statistiche"),
+    ("Conta", "Account", "Cuenta", "Compte", "Account"),
+    ("Não encontrado", "Not found", "No encontrado", "Introuvable", "Non trovato"),
+    ("Página não encontrada", "Page not found", "Página no encontrada", "Page introuvable", "Pagina non trovata"),
+    ("Publicidade", "Advertising", "Publicidad", "Publicité", "Pubblicità"),
+    # --- login / registo
+    ("Palavra-passe alterada. Já podes entrar.", "Password changed. You can now sign in.", "Contraseña cambiada. Ya puedes entrar.", "Mot de passe modifié. Vous pouvez maintenant vous connecter.", "Password modificata. Ora puoi accedere."),
+    ("Entrar", "Sign in", "Entrar", "Se connecter", "Accedi"),
+    ("Bem-vindo de volta.", "Welcome back.", "Bienvenido de nuevo.", "Content de vous revoir.", "Bentornato."),
+    ("Utilizador ou email", "Username or email", "Usuario o correo electrónico", "Nom d’utilisateur ou e-mail", "Nome utente o email"),
+    ("Palavra-passe", "Password", "Contraseña", "Mot de passe", "Password"),
+    ("Esqueci-me da palavra-passe", "I forgot my password", "Olvidé mi contraseña", "Mot de passe oublié", "Ho dimenticato la password"),
+    ("Ainda não tens conta?", "Don’t have an account yet?", "¿Aún no tienes cuenta?", "Pas encore de compte ?", "Non hai ancora un account?"),
+    ("Criar conta", "Create account", "Crear cuenta", "Créer un compte", "Crea account"),
+    ("Demasiadas tentativas. Espera 5 minutos.", "Too many attempts. Wait 5 minutes.", "Demasiados intentos. Espera 5 minutos.", "Trop de tentatives. Attendez 5 minutes.", "Troppi tentativi. Attendi 5 minuti."),
+    ("Esta conta está suspensa. Fala com o administrador.", "This account is suspended. Contact the administrator.", "Esta cuenta está suspendida. Habla con el administrador.", "Ce compte est suspendu. Contactez l’administrateur.", "Questo account è sospeso. Contatta l’amministratore."),
+    ("Utilizador ou palavra-passe incorretos.", "Wrong username or password.", "Usuario o contraseña incorrectos.", "Nom d’utilisateur ou mot de passe incorrect.", "Nome utente o password errati."),
+    ("Registo fechado", "Registration closed", "Registro cerrado", "Inscriptions fermées", "Registrazione chiusa"),
+    ("De momento não estão a ser criadas contas novas.", "New accounts are not being created at the moment.", "De momento no se están creando cuentas nuevas.", "Aucun nouveau compte n’est créé pour le moment.", "Al momento non vengono creati nuovi account."),
+    ("Código de convite", "Invitation code", "Código de invitación", "Code d’invitation", "Codice d’invito"),
+    ("Demora menos de um minuto.", "Takes less than a minute.", "Tarda menos de un minuto.", "Cela prend moins d’une minute.", "Richiede meno di un minuto."),
+    ("Utilizador", "Username", "Usuario", "Nom d’utilisateur", "Nome utente"),
+    ("Email (para recuperar a palavra-passe)", "Email (to recover your password)", "Correo electrónico (para recuperar la contraseña)", "E-mail (pour récupérer le mot de passe)", "Email (per recuperare la password)"),
+    ("Palavra-passe (mínimo 8 caracteres)", "Password (minimum 8 characters)", "Contraseña (mínimo 8 caracteres)", "Mot de passe (8 caractères minimum)", "Password (minimo 8 caratteri)"),
+    ("Repetir palavra-passe", "Repeat password", "Repetir contraseña", "Répéter le mot de passe", "Ripeti la password"),
+    ("Criar conta e entrar", "Create account and sign in", "Crear cuenta y entrar", "Créer le compte et se connecter", "Crea account e accedi"),
+    ("Já tens conta?", "Already have an account?", "¿Ya tienes cuenta?", "Vous avez déjà un compte ?", "Hai già un account?"),
+    ("O registo está fechado.", "Registration is closed.", "El registro está cerrado.", "Les inscriptions sont fermées.", "La registrazione è chiusa."),
+    ("Código de convite incorreto.", "Wrong invitation code.", "Código de invitación incorrecto.", "Code d’invitation incorrect.", "Codice d’invito errato."),
+    ("O utilizador deve ter 3 a 30 caracteres (letras, números, . _ -).", "The username must have 3 to 30 characters (letters, numbers, . _ -).", "El usuario debe tener de 3 a 30 caracteres (letras, números, . _ -).", "Le nom d’utilisateur doit contenir de 3 à 30 caractères (lettres, chiffres, . _ -).", "Il nome utente deve avere da 3 a 30 caratteri (lettere, numeri, . _ -)."),
+    ("Email inválido.", "Invalid email.", "Correo electrónico no válido.", "E-mail invalide.", "Email non valida."),
+    ("A palavra-passe tem de ter pelo menos 8 caracteres.", "The password must have at least 8 characters.", "La contraseña debe tener al menos 8 caracteres.", "Le mot de passe doit contenir au moins 8 caractères.", "La password deve avere almeno 8 caratteri."),
+    ("As palavras-passe não coincidem.", "The passwords do not match.", "Las contraseñas no coinciden.", "Les mots de passe ne correspondent pas.", "Le password non coincidono."),
+    ("Esse utilizador ou email já está registado.", "That username or email is already registered.", "Ese usuario o correo ya está registrado.", "Ce nom d’utilisateur ou cet e-mail est déjà enregistré.", "Questo nome utente o email è già registrato."),
+    # --- recuperação
+    ("Recuperar", "Recover", "Recuperar", "Récupérer", "Recupera"),
+    ("Verifica o teu email", "Check your email", "Revisa tu correo", "Vérifiez votre e-mail", "Controlla la tua email"),
+    ("Se esse email estiver registado, enviámos um link para definires uma nova palavra-passe. O link é válido durante 1 hora.", "If that email is registered, we have sent you a link to set a new password. The link is valid for 1 hour.", "Si ese correo está registrado, te hemos enviado un enlace para definir una nueva contraseña. El enlace es válido durante 1 hora.", "Si cet e-mail est enregistré, nous vous avons envoyé un lien pour définir un nouveau mot de passe. Le lien est valable 1 heure.", "Se questa email è registrata, ti abbiamo inviato un link per impostare una nuova password. Il link è valido per 1 ora."),
+    ("Voltar a entrar", "Back to sign in", "Volver a entrar", "Retour à la connexion", "Torna all’accesso"),
+    ("Recuperar palavra-passe", "Recover password", "Recuperar contraseña", "Récupérer le mot de passe", "Recupera password"),
+    ("Indica o email da tua conta.", "Enter your account email.", "Indica el correo de tu cuenta.", "Indiquez l’e-mail de votre compte.", "Indica l’email del tuo account."),
+    ("Email", "Email", "Correo electrónico", "E-mail", "Email"),
+    ("Enviar link", "Send link", "Enviar enlace", "Envoyer le lien", "Invia link"),
+    ("Voltar", "Back", "Volver", "Retour", "Indietro"),
+    ("Link inválido", "Invalid link", "Enlace no válido", "Lien invalide", "Link non valido"),
+    ("Link inválido ou expirado", "Invalid or expired link", "Enlace no válido o caducado", "Lien invalide ou expiré", "Link non valido o scaduto"),
+    ("Pede um novo link para recuperar a palavra-passe.", "Request a new link to recover your password.", "Pide un nuevo enlace para recuperar la contraseña.", "Demandez un nouveau lien pour récupérer votre mot de passe.", "Richiedi un nuovo link per recuperare la password."),
+    ("Pedir novo link", "Request new link", "Pedir nuevo enlace", "Demander un nouveau lien", "Richiedi nuovo link"),
+    ("Nova palavra-passe", "New password", "Nueva contraseña", "Nouveau mot de passe", "Nuova password"),
+    ("Nova palavra-passe (mínimo 8)", "New password (minimum 8)", "Nueva contraseña (mínimo 8)", "Nouveau mot de passe (8 minimum)", "Nuova password (minimo 8)"),
+    ("Repetir", "Repeat", "Repetir", "Répéter", "Ripeti"),
+    ("Guardar", "Save", "Guardar", "Enregistrer", "Salva"),
+    ("As palavras-passe têm de coincidir e ter 8+ caracteres.", "The passwords must match and have 8+ characters.", "Las contraseñas deben coincidir y tener 8+ caracteres.", "Les mots de passe doivent correspondre et contenir 8 caractères ou plus.", "Le password devono coincidere e avere 8+ caratteri."),
+    # --- início
+    ("Olá,", "Hello,", "Hola,", "Bonjour,", "Ciao,"),
+    ("O ponto da situação.", "Where things stand.", "Cómo van las cosas.", "Le point sur la situation.", "Il punto della situazione."),
+    ("Novo evento", "New event", "Nuevo evento", "Nouvel événement", "Nuovo evento"),
+    ("aplica-se a Faturado e Recebido", "applies to Invoiced and Received", "se aplica a Facturado y Recibido", "s’applique à Facturé et Reçu", "vale per Fatturato e Incassato"),
+    ("Por faturar", "To invoice", "Por facturar", "À facturer", "Da fatturare"),
+    ("Faturado, por receber", "Invoiced, awaiting payment", "Facturado, pendiente de cobro", "Facturé, à encaisser", "Fatturato, da incassare"),
+    ("Faturado em", "Invoiced in", "Facturado en", "Facturé en", "Fatturato a"),
+    ("Recebido de", "Received in", "Cobrado en", "Encaissé en", "Incassato a"),
+    ("pela data da fatura", "by invoice date", "por la fecha de factura", "selon la date de facture", "per data fattura"),
+    ("já pago", "already paid", "ya pagado", "déjà payé", "già pagato"),
+    ("Nada por faturar. 🎬", "Nothing to invoice. 🎬", "Nada por facturar. 🎬", "Rien à facturer. 🎬", "Niente da fatturare. 🎬"),
+    ("Por receber", "To collect", "Pendiente de cobro", "À encaisser", "Da incassare"),
+    ("Nada por receber.", "Nothing to collect.", "Nada pendiente de cobro.", "Rien à encaisser.", "Niente da incassare."),
+    ("Próximos eventos", "Upcoming events", "Próximos eventos", "Prochains événements", "Prossimi eventi"),
+    ("Sem eventos futuros.", "No upcoming events.", "Sin eventos futuros.", "Aucun événement à venir.", "Nessun evento futuro."),
+    ("eventos", "events", "eventos", "événements", "eventi"),
+    ("evento", "event", "evento", "événement", "evento"),
+    ("clientes", "clients", "clientes", "clients", "clienti"),
+    ("cliente", "client", "cliente", "client", "cliente"),
+    ("sem cliente", "no client", "sin cliente", "sans client", "senza cliente"),
+    ("terminou, falta faturar", "ended, still to invoice", "terminó, falta facturar", "terminé, reste à facturer", "terminato, da fatturare"),
+    ("Faturada", "Invoiced", "Facturada", "Facturée", "Fatturata"),
+    ("Paga", "Paid", "Pagada", "Payée", "Pagata"),
+    # --- eventos
+    ("Todos", "All", "Todos", "Tous", "Tutti"),
+    ("Pagos", "Paid", "Pagados", "Payés", "Pagati"),
+    ("Sem eventos.", "No events.", "Sin eventos.", "Aucun événement.", "Nessun evento."),
+    ("Editar evento", "Edit event", "Editar evento", "Modifier l’événement", "Modifica evento"),
+    ("Evento", "Event", "Evento", "Événement", "Evento"),
+    ("Título", "Title", "Título", "Titre", "Titolo"),
+    ("Data de início", "Start date", "Fecha de inicio", "Date de début", "Data di inizio"),
+    ("Data de fim", "End date", "Fecha de fin", "Date de fin", "Data di fine"),
+    ("Cliente", "Client", "Cliente", "Client", "Cliente"),
+    ("— sem cliente —", "— no client —", "— sin cliente —", "— sans client —", "— senza cliente —"),
+    ("Valores", "Amounts", "Importes", "Montants", "Importi"),
+    ("Descrição", "Description", "Descripción", "Description", "Descrizione"),
+    ("Diária", "Day rate", "Tarifa diaria", "Tarif journalier", "Tariffa giornaliera"),
+    ("Meia diária", "Half day", "Media jornada", "Demi-journée", "Mezza giornata"),
+    ("Hora extra", "Overtime", "Hora extra", "Heure supplémentaire", "Ora extra"),
+    ("Aluguer de equipamento", "Equipment rental", "Alquiler de equipo", "Location de matériel", "Noleggio attrezzatura"),
+    ("Deslocação", "Travel", "Desplazamiento", "Déplacement", "Trasferta"),
+    ("Edição", "Editing", "Edición", "Montage", "Montaggio"),
+    ("+ Adicionar linha", "+ Add line", "+ Añadir línea", "+ Ajouter une ligne", "+ Aggiungi riga"),
+    ("Total", "Total", "Total", "Total", "Totale"),
+    ("Data da fatura (vazio = por faturar)", "Invoice date (empty = to invoice)", "Fecha de factura (vacío = por facturar)", "Date de facture (vide = à facturer)", "Data fattura (vuoto = da fatturare)"),
+    ("N.º da fatura", "Invoice no.", "N.º de factura", "N° de facture", "N. fattura"),
+    ("Fatura paga (já recebi)", "Invoice paid (I have been paid)", "Factura pagada (ya cobré)", "Facture payée (j’ai été payé)", "Fattura pagata (ho già incassato)"),
+    ("Notas", "Notes", "Notas", "Notes", "Note"),
+    ("Cancelar", "Cancel", "Cancelar", "Annuler", "Annulla"),
+    ("Apagar evento", "Delete event", "Eliminar evento", "Supprimer l’événement", "Elimina evento"),
+    ("Esta ação não pode ser desfeita.", "This action cannot be undone.", "Esta acción no se puede deshacer.", "Cette action est irréversible.", "Questa azione non può essere annullata."),
+    ("Confirmar: apagar", "Confirm: delete", "Confirmar: eliminar", "Confirmer : supprimer", "Conferma: elimina"),
+    # --- clientes
+    ("Novo cliente", "New client", "Nuevo cliente", "Nouveau client", "Nuovo cliente"),
+    ("Editar cliente", "Edit client", "Editar cliente", "Modifier le client", "Modifica cliente"),
+    ("Ainda sem clientes.", "No clients yet.", "Aún sin clientes.", "Pas encore de clients.", "Ancora nessun cliente."),
+    ("sem valores definidos", "no rates set", "sin tarifas definidas", "aucun tarif défini", "nessuna tariffa definita"),
+    ("Eventos deste cliente", "This client’s events", "Eventos de este cliente", "Événements de ce client", "Eventi di questo cliente"),
+    ("Apagar cliente", "Delete client", "Eliminar cliente", "Supprimer le client", "Elimina cliente"),
+    ("Os eventos ficam, mas sem cliente.", "The events stay, but without a client.", "Los eventos se conservan, pero sin cliente.", "Les événements restent, mais sans client.", "Gli eventi restano, ma senza cliente."),
+    ("URL do logo (opcional)", "Logo URL (optional)", "URL del logo (opcional)", "URL du logo (facultatif)", "URL del logo (facoltativo)"),
+    ("NIF", "Tax ID (NIF)", "NIF", "NIF", "NIF"),
+    ("Contacto", "Contact", "Contacto", "Contact", "Contatto"),
+    ("Valores acordados (ex.: 250 €/dia)", "Agreed rates (e.g. €250/day)", "Tarifas acordadas (ej.: 250 €/día)", "Tarifs convenus (ex. : 250 €/jour)", "Tariffe concordate (es.: 250 €/giorno)"),
+    ("Condições de pagamento", "Payment terms", "Condiciones de pago", "Conditions de paiement", "Condizioni di pagamento"),
+    # --- calendário
+    ("Hoje", "Today", "Hoy", "Aujourd’hui", "Oggi"),
+    ("Seg", "Mon", "Lun", "Lun", "Lun"),
+    ("Ter", "Tue", "Mar", "Mar", "Mar"),
+    ("Qua", "Wed", "Mié", "Mer", "Mer"),
+    ("Qui", "Thu", "Jue", "Jeu", "Gio"),
+    ("Sex", "Fri", "Vie", "Ven", "Ven"),
+    ("Sáb", "Sat", "Sáb", "Sam", "Sab"),
+    ("Dom", "Sun", "Dom", "Dim", "Dom"),
+    ("toca num dia para criar um evento", "tap a day to create an event", "toca un día para crear un evento", "touchez un jour pour créer un événement", "tocca un giorno per creare un evento"),
+    ("Neste mês", "This month", "Este mes", "Ce mois-ci", "Questo mese"),
+    ("Sem eventos neste mês.", "No events this month.", "Sin eventos este mes.", "Aucun événement ce mois-ci.", "Nessun evento questo mese."),
+    # --- estatísticas
+    ("Faturado", "Invoiced", "Facturado", "Facturé", "Fatturato"),
+    ("Recebido", "Received", "Cobrado", "Encaissé", "Incassato"),
+    ("média", "average", "media", "moyenne", "media"),
+    ("/mês", "/month", "/mes", "/mois", "/mese"),
+    ("Dias trabalhados", "Days worked", "Días trabajados", "Jours travaillés", "Giorni lavorati"),
+    ("Melhor mês", "Best month", "Mejor mes", "Meilleur mois", "Mese migliore"),
+    ("Sem dados neste ano.", "No data this year.", "Sin datos este año.", "Aucune donnée cette année.", "Nessun dato quest’anno."),
+    ("Contam os eventos já faturados, no mês e ano da data da fatura.", "Only invoiced events count, in the month and year of the invoice date.", "Cuentan los eventos ya facturados, en el mes y año de la fecha de factura.", "Seuls les événements déjà facturés comptent, au mois et à l’année de la date de facture.", "Contano gli eventi già fatturati, nel mese e anno della data della fattura."),
+    ("Faturado e recebido por mês", "Invoiced and received per month", "Facturado y cobrado por mes", "Facturé et encaissé par mois", "Fatturato e incassato per mese"),
+    ("Mês", "Month", "Mes", "Mois", "Mese"),
+    ("Quem dá mais volume", "Who brings the most volume", "Quién da más volumen", "Qui apporte le plus de volume", "Chi porta più volume"),
+    ("Dias", "Days", "Días", "Jours", "Giorni"),
+    ("dias", "days", "días", "jours", "giorni"),
+    ("dia", "day", "día", "jour", "giorno"),
+    ("€/dia", "€/day", "€/día", "€/jour", "€/giorno"),
+    ("Peso", "Share", "Peso", "Poids", "Peso"),
+    ("Faturado e recebido por mês", "Invoiced and received per month", "Facturado y cobrado por mes", "Facturé et encaissé par mois", "Fatturato e incassato per mese"),
+    # --- conta
+    ("Palavra-passe alterada.", "Password changed.", "Contraseña cambiada.", "Mot de passe modifié.", "Password modificata."),
+    ("Link novo gerado. O antigo deixou de funcionar.", "New link generated. The old one no longer works.", "Enlace nuevo generado. El anterior dejó de funcionar.", "Nouveau lien généré. L’ancien ne fonctionne plus.", "Nuovo link generato. Il vecchio non funziona più."),
+    ("Os teus dados e a tua segurança.", "Your details and your security.", "Tus datos y tu seguridad.", "Vos données et votre sécurité.", "I tuoi dati e la tua sicurezza."),
+    ("Dados pessoais", "Personal details", "Datos personales", "Données personnelles", "Dati personali"),
+    ("Nome", "Name", "Nombre", "Nom", "Nome"),
+    ("Telemóvel", "Mobile phone", "Teléfono móvil", "Téléphone mobile", "Cellulare"),
+    ("Utilizador:", "Username:", "Usuario:", "Nom d’utilisateur :", "Nome utente:"),
+    ("Guardar dados", "Save details", "Guardar datos", "Enregistrer les données", "Salva dati"),
+    ("Alterar palavra-passe", "Change password", "Cambiar contraseña", "Changer le mot de passe", "Cambia password"),
+    ("Palavra-passe atual", "Current password", "Contraseña actual", "Mot de passe actuel", "Password attuale"),
+    ("Repetir nova palavra-passe", "Repeat new password", "Repetir nueva contraseña", "Répéter le nouveau mot de passe", "Ripeti la nuova password"),
+    ("Em Google Calendar → Outras agendas → A partir do URL, cola este link (só leitura). O Google precisa de conseguir aceder ao endereço, por isso só funciona se o site estiver acessível pela internet em HTTPS. Não partilhes este link.", "In Google Calendar → Other calendars → From URL, paste this link (read-only). Google must be able to reach the address, so it only works if the site is reachable from the internet over HTTPS. Do not share this link.", "En Google Calendar → Otros calendarios → Desde URL, pega este enlace (solo lectura). Google necesita poder acceder a la dirección, por lo que solo funciona si el sitio es accesible desde internet por HTTPS. No compartas este enlace.", "Dans Google Agenda → Autres agendas → À partir de l’URL, collez ce lien (lecture seule). Google doit pouvoir accéder à l’adresse, donc cela ne fonctionne que si le site est accessible depuis internet en HTTPS. Ne partagez pas ce lien.", "In Google Calendar → Altri calendari → Da URL, incolla questo link (sola lettura). Google deve poter raggiungere l’indirizzo, quindi funziona solo se il sito è accessibile da internet in HTTPS. Non condividere questo link."),
+    ("Gerar novo link", "Generate new link", "Generar enlace nuevo", "Générer un nouveau lien", "Genera nuovo link"),
+    ("O link antigo deixa de funcionar.", "The old link stops working.", "El enlace anterior deja de funcionar.", "L’ancien lien cesse de fonctionner.", "Il vecchio link smette di funzionare."),
+    ("Terminar sessão", "Sign out", "Cerrar sesión", "Se déconnecter", "Esci"),
+    ("Nome e email válidos são obrigatórios.", "A valid name and email are required.", "Se requieren un nombre y un correo válidos.", "Un nom et un e-mail valides sont obligatoires.", "Sono obbligatori un nome e un’email validi."),
+    ("Esse email já está a ser usado por outra conta.", "That email is already used by another account.", "Ese correo ya lo usa otra cuenta.", "Cet e-mail est déjà utilisé par un autre compte.", "Questa email è già usata da un altro account."),
+    ("A palavra-passe atual está incorreta.", "The current password is incorrect.", "La contraseña actual es incorrecta.", "Le mot de passe actuel est incorrect.", "La password attuale non è corretta."),
+    ("A nova palavra-passe tem de ter 8+ caracteres e coincidir nos dois campos.", "The new password must have 8+ characters and match in both fields.", "La nueva contraseña debe tener 8+ caracteres y coincidir en los dos campos.", "Le nouveau mot de passe doit contenir 8 caractères ou plus et être identique dans les deux champs.", "La nuova password deve avere 8+ caratteri e coincidere nei due campi."),
+    ("Idioma", "Language", "Idioma", "Langue", "Lingua"),
+    ("Escolhe o idioma do site.", "Choose the site language.", "Elige el idioma del sitio.", "Choisissez la langue du site.", "Scegli la lingua del sito."),
+    ("Idioma por defeito", "Default language", "Idioma por defecto", "Langue par défaut", "Lingua predefinita"),
+    ("Usado quando o browser do visitante não indica um idioma disponível.", "Used when the visitor’s browser does not request an available language.", "Se usa cuando el navegador del visitante no indica un idioma disponible.", "Utilisée lorsque le navigateur du visiteur n’indique pas de langue disponible.", "Usata quando il browser del visitatore non indica una lingua disponibile."),
+    # --- admin
+    ("Resumo", "Summary", "Resumen", "Résumé", "Riepilogo"),
+    ("Utilizadores", "Users", "Usuarios", "Utilisateurs", "Utenti"),
+    ("Site", "Site", "Sitio", "Site", "Sito"),
+    ("Base de dados", "Database", "Base de datos", "Base de données", "Database"),
+    ("Textos e registo guardados.", "Texts and registration saved.", "Textos y registro guardados.", "Textes et inscription enregistrés.", "Testi e registrazione salvati."),
+    ("Cores guardadas.", "Colours saved.", "Colores guardados.", "Couleurs enregistrées.", "Colori salvati."),
+    ("Cores repostas.", "Colours reset.", "Colores restablecidos.", "Couleurs réinitialisées.", "Colori ripristinati."),
+    ("Publicidade guardada.", "Advertising saved.", "Publicidad guardada.", "Publicité enregistrée.", "Pubblicità salvata."),
+    ("Dados guardados.", "Details saved.", "Datos guardados.", "Données enregistrées.", "Dati salvati."),
+    ("Palavra-passe definida. A pessoa tem de entrar de novo.", "Password set. The person has to sign in again.", "Contraseña definida. La persona tiene que entrar de nuevo.", "Mot de passe défini. La personne doit se reconnecter.", "Password impostata. La persona deve accedere di nuovo."),
+    ("Link do calendário renovado.", "Calendar link renewed.", "Enlace del calendario renovado.", "Lien du calendrier renouvelé.", "Link del calendario rinnovato."),
+    ("Estado atualizado.", "Status updated.", "Estado actualizado.", "Statut mis à jour.", "Stato aggiornato."),
+    ("Backup criado.", "Backup created.", "Copia de seguridad creada.", "Sauvegarde créée.", "Backup creato."),
+    ("Administrador adicionado.", "Administrator added.", "Administrador añadido.", "Administrateur ajouté.", "Amministratore aggiunto."),
+    ("Gestão do site, das contas e dos dados.", "Manage the site, accounts and data.", "Gestión del sitio, de las cuentas y de los datos.", "Gestion du site, des comptes et des données.", "Gestione del sito, degli account e dei dati."),
+    ("Contas", "Accounts", "Cuentas", "Comptes", "Account"),
+    ("nos últimos 7 dias", "in the last 7 days", "en los últimos 7 días", "ces 7 derniers jours", "negli ultimi 7 giorni"),
+    ("Ativas (7 dias)", "Active (7 days)", "Activas (7 días)", "Actifs (7 jours)", "Attivi (7 giorni)"),
+    ("com acesso recente", "with recent access", "con acceso reciente", "avec accès récent", "con accesso recente"),
+    ("O envio de emails está desligado (define SMTP_USER e SMTP_PASSWORD no Portainer).", "Email sending is off (set SMTP_USER and SMTP_PASSWORD in Portainer).", "El envío de correos está desactivado (define SMTP_USER y SMTP_PASSWORD en Portainer).", "L’envoi d’e-mails est désactivé (définissez SMTP_USER et SMTP_PASSWORD dans Portainer).", "L’invio di email è disattivato (imposta SMTP_USER e SMTP_PASSWORD in Portainer)."),
+    ("BASE_URL não está definido: os links nos emails não funcionam.", "BASE_URL is not set: links in emails will not work.", "BASE_URL no está definido: los enlaces en los correos no funcionan.", "BASE_URL n’est pas défini : les liens dans les e-mails ne fonctionnent pas.", "BASE_URL non è impostato: i link nelle email non funzionano."),
+    ("Qualquer pessoa com o endereço do site pode criar conta. Define um código de convite em Site.", "Anyone with the site address can create an account. Set an invitation code under Site.", "Cualquier persona con la dirección del sitio puede crear una cuenta. Define un código de invitación en Sitio.", "Toute personne ayant l’adresse du site peut créer un compte. Définissez un code d’invitation dans Site.", "Chiunque abbia l’indirizzo del sito può creare un account. Imposta un codice d’invito in Sito."),
+    ("Tudo em ordem.", "All good.", "Todo en orden.", "Tout est en ordre.", "Tutto a posto."),
+    ("registo", "registered", "registrado el", "inscrit le", "registrato il"),
+    ("nunca entrou", "never signed in", "nunca ha entrado", "jamais connecté", "mai acceduto"),
+    ("Avisos", "Warnings", "Avisos", "Avertissements", "Avvisi"),
+    ("Últimas contas", "Latest accounts", "Últimas cuentas", "Derniers comptes", "Ultimi account"),
+    ("Ver todas as contas", "See all accounts", "Ver todas las cuentas", "Voir tous les comptes", "Vedi tutti gli account"),
+    ("Suspensa", "Suspended", "Suspendida", "Suspendu", "Sospeso"),
+    ("Administradores", "Administrators", "Administradores", "Administrateurs", "Amministratori"),
+    ("Atuais:", "Current:", "Actuales:", "Actuels :", "Attuali:"),
+    (". Os administradores veem e gerem todas as contas e dados.", ". Administrators see and manage all accounts and data.", ". Los administradores ven y gestionan todas las cuentas y datos.", ". Les administrateurs voient et gèrent tous les comptes et données.", ". Gli amministratori vedono e gestiscono tutti gli account e i dati."),
+    ("Para adicionar alguém, essa pessoa tem de ter criado conta primeiro.", "To add someone, that person must have created an account first.", "Para añadir a alguien, esa persona debe haber creado una cuenta antes.", "Pour ajouter quelqu’un, cette personne doit d’abord avoir créé un compte.", "Per aggiungere qualcuno, quella persona deve aver prima creato un account."),
+    ("Adicionar administrador", "Add administrator", "Añadir administrador", "Ajouter un administrateur", "Aggiungi amministratore"),
+    ("Tornar admin", "Make admin", "Hacer admin", "Rendre admin", "Rendi admin"),
+    ("Não há mais contas para promover.", "There are no more accounts to promote.", "No hay más cuentas para promover.", "Il n’y a plus de comptes à promouvoir.", "Non ci sono altri account da promuovere."),
+    ("contas. Clica num nome para editar, mudar o email, repor a palavra-passe ou suspender.", "accounts. Click a name to edit, change the email, reset the password or suspend.", "cuentas. Haz clic en un nombre para editar, cambiar el correo, restablecer la contraseña o suspender.", "comptes. Cliquez sur un nom pour modifier, changer l’e-mail, réinitialiser le mot de passe ou suspendre.", "account. Clicca su un nome per modificare, cambiare l’email, reimpostare la password o sospendere."),
+    ("Registo", "Registered", "Registro", "Inscription", "Registrazione"),
+    ("Último acesso", "Last access", "Último acceso", "Dernier accès", "Ultimo accesso"),
+    ("último acesso", "last access", "último acceso", "dernier accès", "ultimo accesso"),
+    ("nunca", "never", "nunca", "jamais", "mai"),
+    ("Link de recuperação (válido 1 hora)", "Recovery link (valid for 1 hour)", "Enlace de recuperación (válido 1 hora)", "Lien de récupération (valable 1 heure)", "Link di recupero (valido 1 ora)"),
+    ("Envia este link à pessoa para ela escolher uma nova palavra-passe.", "Send this link to the person so they can choose a new password.", "Envía este enlace a la persona para que elija una nueva contraseña.", "Envoyez ce lien à la personne pour qu’elle choisisse un nouveau mot de passe.", "Invia questo link alla persona così potrà scegliere una nuova password."),
+    ("‹ Todas as contas", "‹ All accounts", "‹ Todas las cuentas", "‹ Tous les comptes", "‹ Tutti gli account"),
+    ("Dados da conta", "Account details", "Datos de la cuenta", "Données du compte", "Dati dell’account"),
+    ("Acesso", "Access", "Acceso", "Accès", "Accesso"),
+    ("Gerar link de recuperação", "Generate recovery link", "Generar enlace de recuperación", "Générer un lien de récupération", "Genera link di recupero"),
+    ("Renovar link do calendário", "Renew calendar link", "Renovar enlace del calendario", "Renouveler le lien du calendrier", "Rinnova link del calendario"),
+    ("Definir nova palavra-passe (mínimo 8)", "Set new password (minimum 8)", "Definir nueva contraseña (mínimo 8)", "Définir un nouveau mot de passe (8 minimum)", "Imposta nuova password (minimo 8)"),
+    ("Definir", "Set", "Definir", "Définir", "Imposta"),
+    ("Estado", "Status", "Estado", "Statut", "Stato"),
+    ("Remover admin", "Remove admin", "Quitar admin", "Retirer admin", "Rimuovi admin"),
+    ("Reativar conta", "Reactivate account", "Reactivar cuenta", "Réactiver le compte", "Riattiva account"),
+    ("Suspender conta", "Suspend account", "Suspender cuenta", "Suspendre le compte", "Sospendi account"),
+    ("Uma conta suspensa não consegue entrar, mas os dados ficam guardados.", "A suspended account cannot sign in, but its data is kept.", "Una cuenta suspendida no puede entrar, pero los datos se conservan.", "Un compte suspendu ne peut pas se connecter, mais ses données sont conservées.", "Un account sospeso non può accedere, ma i dati vengono conservati."),
+    ("Apagar conta e todos os dados", "Delete account and all data", "Eliminar cuenta y todos los datos", "Supprimer le compte et toutes les données", "Elimina account e tutti i dati"),
+    ("Apaga a conta e os dados associados:", "Deletes the account and its data:", "Elimina la cuenta y sus datos asociados:", "Supprime le compte et ses données :", "Elimina l’account e i dati associati:"),
+    (". Não dá para desfazer (só com um backup).", ". This cannot be undone (only with a backup).", ". No se puede deshacer (solo con una copia de seguridad).", ". Impossible à annuler (sauf avec une sauvegarde).", ". Non si può annullare (solo con un backup)."),
+    ("Escreve", "Type", "Escribe", "Saisissez", "Scrivi"),
+    ("para confirmar.", "to confirm.", "para confirmar.", "pour confirmer.", "per confermare."),
+    ("Apagar definitivamente", "Delete permanently", "Eliminar definitivamente", "Supprimer définitivement", "Elimina definitivamente"),
+    ("Azul", "Blue", "Azul", "Bleu", "Blu"),
+    ("Esmeralda", "Emerald", "Esmeralda", "Émeraude", "Smeraldo"),
+    ("Violeta", "Violet", "Violeta", "Violet", "Viola"),
+    ("Laranja", "Orange", "Naranja", "Orange", "Arancione"),
+    ("Grafite", "Graphite", "Grafito", "Graphite", "Grafite"),
+    ("Nomes e textos", "Names and texts", "Nombres y textos", "Noms et textes", "Nomi e testi"),
+    ("Nome do site", "Site name", "Nombre del sitio", "Nom du site", "Nome del sito"),
+    ("Título da página de entrada", "Sign-in page title", "Título de la página de entrada", "Titre de la page d’accueil", "Titolo della pagina di accesso"),
+    ("Texto da página de entrada", "Sign-in page text", "Texto de la página de entrada", "Texte de la page d’accueil", "Testo della pagina di accesso"),
+    ("Permitir que novas pessoas criem conta", "Allow new people to create an account", "Permitir que personas nuevas creen cuenta", "Autoriser de nouvelles personnes à créer un compte", "Consenti a nuove persone di creare un account"),
+    ("Código de convite (vazio = sem código)", "Invitation code (empty = no code)", "Código de invitación (vacío = sin código)", "Code d’invitation (vide = aucun code)", "Codice d’invito (vuoto = nessun codice)"),
+    ("Cores", "Colours", "Colores", "Couleurs", "Colori"),
+    ("Mudam em todo o site e no ícone do separador. O modo escuro ajusta-se sozinho.", "They change across the whole site and the tab icon. Dark mode adjusts by itself.", "Cambian en todo el sitio y en el icono de la pestaña. El modo oscuro se ajusta solo.", "Elles changent sur tout le site et dans l’icône de l’onglet. Le mode sombre s’ajuste tout seul.", "Cambiano in tutto il sito e nell’icona della scheda. La modalità scura si adatta da sola."),
+    ("Principal", "Main", "Principal", "Principale", "Principale"),
+    ("Botão", "Button", "Botón", "Bouton", "Pulsante"),
+    ("✓ Faturada", "✓ Invoiced", "✓ Facturada", "✓ Facturée", "✓ Fatturata"),
+    ("✓ Paga", "✓ Paid", "✓ Pagada", "✓ Payée", "✓ Pagata"),
+    ("Guardar cores", "Save colours", "Guardar colores", "Enregistrer les couleurs", "Salva colori"),
+    ("Repor cores originais", "Restore original colours", "Restablecer colores originales", "Rétablir les couleurs d’origine", "Ripristina colori originali"),
+    ("Preenche uma imagem ou um texto para ver a pré-visualização.", "Fill in an image or text to see the preview.", "Rellena una imagen o un texto para ver la vista previa.", "Renseignez une image ou un texte pour voir l’aperçu.", "Inserisci un’immagine o un testo per vedere l’anteprima."),
+    ("Banner de publicidade", "Advertising banner", "Banner publicitario", "Bannière publicitaire", "Banner pubblicitario"),
+    ("Aparece como um banner com a indicação «Publicidade». Aceita imagem ou texto, com ligação opcional.", "It appears as a banner labelled «Advertising». It accepts an image or text, with an optional link.", "Aparece como un banner con la indicación «Publicidad». Acepta imagen o texto, con enlace opcional.", "Il apparaît comme une bannière portant la mention «Publicité». Il accepte une image ou du texte, avec un lien facultatif.", "Appare come un banner con l’indicazione «Pubblicità». Accetta immagine o testo, con link facoltativo."),
+    ("Scripts de anúncios (por exemplo AdSense) ficam bloqueados por segurança.", "Ad scripts (for example AdSense) are blocked for security.", "Los scripts de anuncios (por ejemplo AdSense) están bloqueados por seguridad.", "Les scripts publicitaires (par exemple AdSense) sont bloqués par sécurité.", "Gli script pubblicitari (ad esempio AdSense) sono bloccati per sicurezza."),
+    ("Mostrar publicidade", "Show advertising", "Mostrar publicidad", "Afficher la publicité", "Mostra pubblicità"),
+    ("URL da imagem (https://...)", "Image URL (https://...)", "URL de la imagen (https://...)", "URL de l’image (https://...)", "URL dell’immagine (https://...)"),
+    ("Ligação ao clicar (opcional)", "Link when clicked (optional)", "Enlace al hacer clic (opcional)", "Lien au clic (facultatif)", "Link al clic (facoltativo)"),
+    ("Texto (usa-se também como descrição da imagem)", "Text (also used as the image description)", "Texto (se usa también como descripción de la imagen)", "Texte (utilisé aussi comme description de l’image)", "Testo (usato anche come descrizione dell’immagine)"),
+    ("Onde aparece", "Where it appears", "Dónde aparece", "Où cela apparaît", "Dove appare"),
+    ("Dentro da aplicação (topo de cada página)", "Inside the app (top of each page)", "Dentro de la aplicación (parte superior de cada página)", "Dans l’application (en haut de chaque page)", "Dentro l’applicazione (in cima a ogni pagina)"),
+    ("Páginas de entrada e registo", "Sign-in and registration pages", "Páginas de entrada y registro", "Pages de connexion et d’inscription", "Pagine di accesso e registrazione"),
+    ("Pré-visualização", "Preview", "Vista previa", "Aperçu", "Anteprima"),
+    ("Ainda não há backups guardados no servidor.", "There are no backups stored on the server yet.", "Aún no hay copias de seguridad guardadas en el servidor.", "Aucune sauvegarde n’est encore stockée sur le serveur.", "Non ci sono ancora backup salvati sul server."),
+    ("Descarregar", "Download", "Descargar", "Télécharger", "Scarica"),
+    ("automático", "automatic", "automático", "automatique", "automatico"),
+    ("manual", "manual", "manual", "manuelle", "manuale"),
+    ("antes de restaurar", "before restoring", "antes de restaurar", "avant restauration", "prima del ripristino"),
+    ("antes de editar", "before editing", "antes de editar", "avant modification", "prima della modifica"),
+    ("antes de apagar", "before deleting", "antes de eliminar", "avant suppression", "prima dell’eliminazione"),
+    ("Backups", "Backups", "Copias de seguridad", "Sauvegardes", "Backup"),
+    ("Há um backup automático por dia (guarda os últimos 14). Ficam na pasta de dados do servidor, por isso descarrega de vez em quando uma cópia para outro sítio.", "There is one automatic backup per day (the last 14 are kept). They are stored in the server’s data folder, so download a copy now and then to somewhere else.", "Hay una copia de seguridad automática al día (se guardan las últimas 14). Se almacenan en la carpeta de datos del servidor, así que descarga de vez en cuando una copia a otro sitio.", "Il y a une sauvegarde automatique par jour (les 14 dernières sont conservées). Elles sont stockées dans le dossier de données du serveur, téléchargez donc de temps en temps une copie ailleurs.", "C’è un backup automatico al giorno (vengono conservati gli ultimi 14). Si trovano nella cartella dati del server, quindi scarica ogni tanto una copia in un altro posto."),
+    ("Criar e descarregar backup agora", "Create and download backup now", "Crear y descargar copia ahora", "Créer et télécharger une sauvegarde maintenant", "Crea e scarica backup ora"),
+    ("Criar backup no servidor", "Create backup on the server", "Crear copia en el servidor", "Créer une sauvegarde sur le serveur", "Crea backup sul server"),
+    ("Restaurar um backup", "Restore a backup", "Restaurar una copia de seguridad", "Restaurer une sauvegarde", "Ripristina un backup"),
+    ("Substitui", "Replaces", "Sustituye", "Remplace", "Sostituisce"),
+    ("toda", "all", "toda", "toute", "tutta"),
+    ("a base de dados atual pelo ficheiro escolhido (um .db descarregado daqui). É criado um backup do estado atual antes. Depois tens de entrar de novo.", "the current database with the chosen file (a .db downloaded from here). A backup of the current state is created first. Afterwards you have to sign in again.", "la base de datos actual por el archivo elegido (un .db descargado desde aquí). Antes se crea una copia del estado actual. Después tienes que entrar de nuevo.", "la base de données actuelle par le fichier choisi (un .db téléchargé ici). Une sauvegarde de l’état actuel est créée avant. Ensuite, vous devez vous reconnecter.", "il database attuale con il file scelto (un .db scaricato da qui). Prima viene creato un backup dello stato attuale. Poi devi accedere di nuovo."),
+    ("Restaurar", "Restore", "Restaurar", "Restaurer", "Ripristina"),
+    ("Ver e editar dados", "View and edit data", "Ver y editar datos", "Voir et modifier les données", "Vedi e modifica dati"),
+    ("Tabelas (clica para ver as primeiras 100 linhas):", "Tables (click to see the first 100 rows):", "Tablas (haz clic para ver las primeras 100 filas):", "Tables (cliquez pour voir les 100 premières lignes) :", "Tabelle (clicca per vedere le prime 100 righe):"),
+    ("Confirmo que esta instrução pode alterar dados (é criado um backup antes)", "I confirm this statement may change data (a backup is created first)", "Confirmo que esta instrucción puede modificar datos (antes se crea una copia)", "Je confirme que cette instruction peut modifier des données (une sauvegarde est créée avant)", "Confermo che questa istruzione può modificare i dati (prima viene creato un backup)"),
+    ("Exemplos:", "Examples:", "Ejemplos:", "Exemples :", "Esempi:"),
+    ("Executar", "Run", "Ejecutar", "Exécuter", "Esegui"),
+    ("Executado. Linhas alteradas:", "Done. Rows changed:", "Ejecutado. Filas modificadas:", "Exécuté. Lignes modifiées :", "Eseguito. Righe modificate:"),
+    ("Esta instrução altera dados. Marca a caixa de confirmação para a executar (é criado um backup antes).", "This statement changes data. Tick the confirmation box to run it (a backup is created first).", "Esta instrucción modifica datos. Marca la casilla de confirmación para ejecutarla (antes se crea una copia).", "Cette instruction modifie des données. Cochez la case de confirmation pour l’exécuter (une sauvegarde est créée avant).", "Questa istruzione modifica i dati. Spunta la casella di conferma per eseguirla (prima viene creato un backup)."),
+    ("Erro:", "Error:", "Error:", "Erreur :", "Errore:"),
+    ("A mostrar as primeiras 200 linhas.", "Showing the first 200 rows.", "Mostrando las primeras 200 filas.", "Affichage des 200 premières lignes.", "Mostro le prime 200 righe."),
+    ("Sem resultados.", "No results.", "Sin resultados.", "Aucun résultat.", "Nessun risultato."),
+    ("Isto substitui TODA a base de dados atual pela do ficheiro. Continuar?", "This replaces ALL of the current database with the file. Continue?", "Esto sustituye TODA la base de datos actual por la del archivo. ¿Continuar?", "Cela remplace TOUTE la base de données actuelle par celle du fichier. Continuer ?", "Questo sostituisce TUTTO il database attuale con quello del file. Continuare?"),
+    ("A restaurar...", "Restoring...", "Restaurando...", "Restauration...", "Ripristino..."),
+    ("Falhou o envio do ficheiro.", "The file upload failed.", "Falló el envío del archivo.", "L’envoi du fichier a échoué.", "Invio del file non riuscito."),
+    ("Cor inválida.", "Invalid colour.", "Color no válido.", "Couleur invalide.", "Colore non valido."),
+    ("Utilizador (3 a 30 caracteres), nome e email têm de ser válidos.", "Username (3 to 30 characters), name and email must be valid.", "El usuario (3 a 30 caracteres), el nombre y el correo deben ser válidos.", "Le nom d’utilisateur (3 à 30 caractères), le nom et l’e-mail doivent être valides.", "Nome utente (da 3 a 30 caratteri), nome ed email devono essere validi."),
+    ("Esse utilizador ou email já existe noutra conta.", "That username or email already exists on another account.", "Ese usuario o correo ya existe en otra cuenta.", "Ce nom d’utilisateur ou cet e-mail existe déjà sur un autre compte.", "Questo nome utente o email esiste già in un altro account."),
+    ("Não podes remover o último administrador, nem a ti próprio.", "You cannot remove the last administrator, nor yourself.", "No puedes quitar al último administrador, ni a ti mismo.", "Vous ne pouvez pas retirer le dernier administrateur, ni vous-même.", "Non puoi rimuovere l’ultimo amministratore, né te stesso."),
+    ("Não te podes suspender a ti próprio.", "You cannot suspend yourself.", "No puedes suspenderte a ti mismo.", "Vous ne pouvez pas vous suspendre vous-même.", "Non puoi sospendere te stesso."),
+    ("Não podes apagar a tua própria conta aqui.", "You cannot delete your own account here.", "No puedes eliminar tu propia cuenta aquí.", "Vous ne pouvez pas supprimer votre propre compte ici.", "Non puoi eliminare il tuo account da qui."),
+    ("Para apagar, escreve exatamente o nome de utilizador.", "To delete, type the username exactly.", "Para eliminar, escribe exactamente el nombre de usuario.", "Pour supprimer, saisissez exactement le nom d’utilisateur.", "Per eliminare, scrivi esattamente il nome utente."),
+    ("Ficheiro inválido ou demasiado grande (máximo 100 MB).", "Invalid or too large file (maximum 100 MB).", "Archivo no válido o demasiado grande (máximo 100 MB).", "Fichier invalide ou trop volumineux (100 Mo maximum).", "File non valido o troppo grande (massimo 100 MB)."),
+    ("Isto não é um ficheiro de base de dados SQLite.", "This is not an SQLite database file.", "Esto no es un archivo de base de datos SQLite.", "Ce n’est pas un fichier de base de données SQLite.", "Questo non è un file di database SQLite."),
+    ("O ficheiro está danificado.", "The file is damaged.", "El archivo está dañado.", "Le fichier est endommagé.", "Il file è danneggiato."),
+    ("Este ficheiro não parece ser uma base de dados da Claquete.", "This file does not look like a Claquete database.", "Este archivo no parece ser una base de datos de Claquete.", "Ce fichier ne ressemble pas à une base de données Claquete.", "Questo file non sembra un database di Claquete."),
+    ("Não autorizado", "Not authorized", "No autorizado", "Non autorisé", "Non autorizzato"),
+]
+
+
+P += [
+    # --- rodapé, idioma, sobre, suporte
+    ("Suporte", "Support", "Soporte", "Assistance", "Assistenza"),
+    ("Sobre", "About", "Acerca de", "À propos", "Informazioni"),
+    ("Feito por", "Made by", "Hecho por", "Réalisé par", "Realizzato da"),
+    ("Este site é um organizador pessoal para freelancers de audiovisual: guarda num só sítio os teus eventos, os teus clientes e o estado de cada fatura.", "This site is a personal organiser for audiovisual freelancers: it keeps your events, your clients and the status of each invoice in one place.", "Este sitio es un organizador personal para freelancers del audiovisual: guarda en un solo lugar tus eventos, tus clientes y el estado de cada factura.", "Ce site est un organisateur personnel pour les freelances de l’audiovisuel : il rassemble au même endroit vos événements, vos clients et l’état de chaque facture.", "Questo sito è un organizzatore personale per i freelance dell’audiovisivo: raccoglie in un unico posto i tuoi eventi, i tuoi clienti e lo stato di ogni fattura."),
+    ("O que podes fazer", "What you can do", "Qué puedes hacer", "Ce que vous pouvez faire", "Cosa puoi fare"),
+    ("Organizar eventos, incluindo trabalhos de vários dias e com vários valores.", "Organise events, including multi-day jobs with several amounts.", "Organizar eventos, incluidos trabajos de varios días y con varios importes.", "Organiser les événements, y compris les missions de plusieurs jours avec plusieurs montants.", "Organizzare eventi, compresi lavori di più giorni con più importi."),
+    ("Guardar clientes com logótipo, valores acordados e condições de pagamento.", "Keep clients with their logo, agreed rates and payment terms.", "Guardar clientes con logotipo, tarifas acordadas y condiciones de pago.", "Conserver les clients avec leur logo, leurs tarifs convenus et leurs conditions de paiement.", "Conservare i clienti con logo, tariffe concordate e condizioni di pagamento."),
+    ("Saber de relance o que falta faturar, o que falta receber e o que já recebeste, mês a mês.", "See at a glance what still needs invoicing, what you are still owed and what you have already received, month by month.", "Saber de un vistazo qué falta por facturar, qué falta por cobrar y qué has cobrado ya, mes a mes.", "Voir d’un coup d’œil ce qu’il reste à facturer, à encaisser et ce que vous avez déjà reçu, mois par mois.", "Sapere a colpo d’occhio cosa resta da fatturare, cosa devi ancora incassare e cosa hai già incassato, mese per mese."),
+    ("Ver estatísticas e gráficos do teu ano.", "See statistics and charts for your year.", "Ver estadísticas y gráficos de tu año.", "Consulter les statistiques et graphiques de votre année.", "Vedere statistiche e grafici del tuo anno."),
+    ("Ligar o calendário ao Google Calendar.", "Connect the calendar to Google Calendar.", "Conectar el calendario a Google Calendar.", "Relier le calendrier à Google Agenda.", "Collegare il calendario a Google Calendar."),
+    ("Importante", "Important", "Importante", "Important", "Importante"),
+    ("Este site não emite faturas: a emissão continua a ser feita por ti, no teu programa de faturação. Aqui só acompanhas o estado de cada uma: por faturar, faturada ou paga.", "This site does not issue invoices: you keep issuing them yourself, in your invoicing software. Here you only track the status of each one: to invoice, invoiced or paid.", "Este sitio no emite facturas: la emisión la sigues haciendo tú, en tu programa de facturación. Aquí solo haces el seguimiento del estado de cada una: por facturar, facturada o pagada.", "Ce site n’émet pas de factures : vous continuez à les émettre vous-même, dans votre logiciel de facturation. Ici, vous suivez seulement l’état de chacune : à facturer, facturée ou payée.", "Questo sito non emette fatture: continui a emetterle tu, nel tuo programma di fatturazione. Qui segui solo lo stato di ciascuna: da fatturare, fatturata o pagata."),
+    ("Privacidade", "Privacy", "Privacidad", "Confidentialité", "Privacy"),
+    ("Cada conta vê apenas os seus próprios eventos e clientes. Os dados ficam no servidor onde este site está instalado.", "Each account only sees its own events and clients. The data stays on the server where this site is installed.", "Cada cuenta solo ve sus propios eventos y clientes. Los datos permanecen en el servidor donde está instalado este sitio.", "Chaque compte ne voit que ses propres événements et clients. Les données restent sur le serveur où ce site est installé.", "Ogni account vede solo i propri eventi e clienti. I dati restano sul server in cui è installato questo sito."),
+    ("Precisas de ajuda ou tens uma sugestão?", "Need help or have a suggestion?", "¿Necesitas ayuda o tienes una sugerencia?", "Besoin d’aide ou une suggestion ?", "Hai bisogno di aiuto o hai un suggerimento?"),
+    ("Falar com o suporte", "Contact support", "Hablar con el soporte", "Contacter l’assistance", "Parla con l’assistenza"),
+    ("Tens uma dúvida, um problema ou uma sugestão? Escreve-nos e respondemos o mais depressa possível.", "Have a question, a problem or a suggestion? Write to us and we will reply as soon as possible.", "¿Tienes una duda, un problema o una sugerencia? Escríbenos y responderemos lo antes posible.", "Une question, un problème ou une suggestion ? Écrivez-nous et nous répondrons dès que possible.", "Hai un dubbio, un problema o un suggerimento? Scrivici e risponderemo il prima possibile."),
+    ("Ainda não tens conta ou não consegues entrar? Podes escrever na mesma: indica o teu email para podermos responder.", "Don’t have an account yet, or can’t sign in? You can still write to us: give your email so we can reply.", "¿Aún no tienes cuenta o no puedes entrar? Puedes escribirnos igualmente: indica tu correo para poder responderte.", "Pas encore de compte, ou impossible de vous connecter ? Vous pouvez quand même nous écrire : indiquez votre e-mail pour que nous puissions répondre.", "Non hai ancora un account o non riesci ad accedere? Puoi scriverci comunque: indica la tua email per permetterci di risponderti."),
+    ("O teu nome", "Your name", "Tu nombre", "Votre nom", "Il tuo nome"),
+    ("O teu email (obrigatório, para podermos responder)", "Your email (required, so we can reply)", "Tu correo (obligatorio, para poder responderte)", "Votre e-mail (obligatoire, pour que nous puissions répondre)", "La tua email (obbligatoria, per poterti rispondere)"),
+    ("A escrever como", "Writing as", "Escribiendo como", "Vous écrivez en tant que", "Stai scrivendo come"),
+    ("As respostas aparecem aqui e também são enviadas para o teu email.", "Replies appear here and are also sent to your email.", "Las respuestas aparecen aquí y también se envían a tu correo.", "Les réponses apparaissent ici et sont aussi envoyées à votre e-mail.", "Le risposte compaiono qui e vengono inviate anche alla tua email."),
+    ("Assunto", "Subject", "Asunto", "Objet", "Oggetto"),
+    ("Mensagem", "Message", "Mensaje", "Message", "Messaggio"),
+    ("Enviar mensagem", "Send message", "Enviar mensaje", "Envoyer le message", "Invia messaggio"),
+    ("As tuas mensagens", "Your messages", "Tus mensajes", "Vos messages", "I tuoi messaggi"),
+    ("Ainda não enviaste nenhuma mensagem.", "You have not sent any messages yet.", "Aún no has enviado ningún mensaje.", "Vous n’avez encore envoyé aucun message.", "Non hai ancora inviato nessun messaggio."),
+    ("Aberta", "Open", "Abierta", "Ouverte", "Aperta"),
+    ("Fechada", "Closed", "Cerrada", "Fermée", "Chiusa"),
+    ("Nova resposta", "New reply", "Nueva respuesta", "Nouvelle réponse", "Nuova risposta"),
+    ("Mensagem enviada. A resposta aparece nesta página e é enviada para o teu email. Guarda este endereço para voltares cá.", "Message sent. The reply will appear on this page and is sent to your email. Save this address so you can come back.", "Mensaje enviado. La respuesta aparecerá en esta página y se enviará a tu correo. Guarda esta dirección para volver.", "Message envoyé. La réponse apparaîtra sur cette page et sera envoyée à votre e-mail. Enregistrez cette adresse pour revenir.", "Messaggio inviato. La risposta comparirà in questa pagina e sarà inviata alla tua email. Salva questo indirizzo per tornare."),
+    ("Resposta enviada.", "Reply sent.", "Respuesta enviada.", "Réponse envoyée.", "Risposta inviata."),
+    ("Preenche o nome, um email válido, o assunto e a mensagem.", "Fill in your name, a valid email, the subject and the message.", "Rellena el nombre, un correo válido, el asunto y el mensaje.", "Renseignez le nom, un e-mail valide, l’objet et le message.", "Compila il nome, un’email valida, l’oggetto e il messaggio."),
+    ("Demasiadas mensagens. Tenta mais tarde.", "Too many messages. Try again later.", "Demasiados mensajes. Inténtalo más tarde.", "Trop de messages. Réessayez plus tard.", "Troppi messaggi. Riprova più tardi."),
+    ("‹ Suporte", "‹ Support", "‹ Soporte", "‹ Assistance", "‹ Assistenza"),
+    ("Tu", "You", "Tú", "Vous", "Tu"),
+    ("Conversa com o suporte", "Conversation with support", "Conversación con el soporte", "Conversation avec l’assistance", "Conversazione con l’assistenza"),
+    ("Responder", "Reply", "Responder", "Répondre", "Rispondi"),
+    ("Enviar resposta", "Send reply", "Enviar respuesta", "Envoyer la réponse", "Invia risposta"),
+    ("Esta conversa está fechada. Se responderes, volta a abrir.", "This conversation is closed. If you reply, it reopens.", "Esta conversación está cerrada. Si respondes, se vuelve a abrir.", "Cette conversation est fermée. Si vous répondez, elle sera rouverte.", "Questa conversazione è chiusa. Se rispondi, si riapre."),
+    # --- admin: suporte
+    ("Mensagens de suporte por ler:", "Support messages unread:", "Mensajes de soporte sin leer:", "Messages d’assistance non lus :", "Messaggi di assistenza da leggere:"),
+    ("Mensagens de suporte", "Support messages", "Mensajes de soporte", "Messages d’assistance", "Messaggi di assistenza"),
+    ("Abertas", "Open", "Abiertas", "Ouvertes", "Aperte"),
+    ("Fechadas", "Closed", "Cerradas", "Fermées", "Chiuse"),
+    ("Sem mensagens.", "No messages.", "Sin mensajes.", "Aucun message.", "Nessun messaggio."),
+    ("Nova", "New", "Nueva", "Nouveau", "Nuovo"),
+    ("Visitante", "Visitor", "Visitante", "Visiteur", "Visitatore"),
+    ("‹ Todas as mensagens", "‹ All messages", "‹ Todos los mensajes", "‹ Tous les messages", "‹ Tutti i messaggi"),
+    ("Resposta", "Reply", "Respuesta", "Réponse", "Risposta"),
+    ("A resposta aparece na página da conversa e é enviada por email para", "The reply appears on the conversation page and is sent by email to", "La respuesta aparece en la página de la conversación y se envía por correo a", "La réponse apparaît sur la page de la conversation et est envoyée par e-mail à", "La risposta compare nella pagina della conversazione e viene inviata via email a"),
+    ("(se o envio de emails estiver ativo).", "(if email sending is on).", "(si el envío de correos está activo).", "(si l’envoi d’e-mails est activé).", "(se l’invio di email è attivo)."),
+    ("Link da conversa (para enviares manualmente, se precisares)", "Conversation link (to send manually if you need to)", "Enlace de la conversación (para enviar manualmente, si lo necesitas)", "Lien de la conversation (à envoyer manuellement si besoin)", "Link della conversazione (da inviare manualmente, se necessario)"),
+    ("Fechar conversa", "Close conversation", "Cerrar conversación", "Fermer la conversation", "Chiudi conversazione"),
+    ("Reabrir conversa", "Reopen conversation", "Reabrir conversación", "Rouvrir la conversation", "Riapri conversazione"),
+    ("Apagar conversa", "Delete conversation", "Eliminar conversación", "Supprimer la conversation", "Elimina conversazione"),
+    ("Conversa fechada.", "Conversation closed.", "Conversación cerrada.", "Conversation fermée.", "Conversazione chiusa."),
+    ("Conversa reaberta.", "Conversation reopened.", "Conversación reabierta.", "Conversation rouverte.", "Conversazione riaperta."),
+    ("Conversa apagada.", "Conversation deleted.", "Conversación eliminada.", "Conversation supprimée.", "Conversazione eliminata."),
+    ("Escreve a resposta.", "Write the reply.", "Escribe la respuesta.", "Rédigez la réponse.", "Scrivi la risposta."),
+    ("Nova mensagem de suporte", "New support message", "Nuevo mensaje de soporte", "Nouveau message d’assistance", "Nuovo messaggio di assistenza"),
+    ("Conversa não encontrada.", "Conversation not found.", "Conversación no encontrada.", "Conversation introuvable.", "Conversazione non trovata."),
+]
+
+P += [
+    ("faturado", "invoiced", "facturado", "facturé", "fatturato"),
+    ("recebido", "received", "cobrado", "encaissé", "incassato"),
+]
+
+P += [
+    ("por receber", "to collect", "por cobrar", "à encaisser", "da incassare"),
+]
+
+# --- e-mails (pt, en, es, fr, it) com {marcadores}
+MAIL = {
+    "welcome_s": ("Bem-vindo à {site}", "Welcome to {site}", "Bienvenido a {site}", "Bienvenue sur {site}", "Benvenuto su {site}"),
+    "welcome_b": ("Olá {name},\n\nA tua conta na {site} foi criada com sucesso.\n\nUtilizador: {user}\n{enter}\nSe não foste tu a criar esta conta, ignora este email.",
+                  "Hello {name},\n\nYour {site} account has been created.\n\nUsername: {user}\n{enter}\nIf you did not create this account, please ignore this email.",
+                  "Hola {name}:\n\nTu cuenta de {site} se ha creado correctamente.\n\nUsuario: {user}\n{enter}\nSi no has creado tú esta cuenta, ignora este correo.",
+                  "Bonjour {name},\n\nVotre compte {site} a bien été créé.\n\nNom d’utilisateur : {user}\n{enter}\nSi vous n’êtes pas à l’origine de cette création, ignorez cet e-mail.",
+                  "Ciao {name},\n\nIl tuo account {site} è stato creato con successo.\n\nNome utente: {user}\n{enter}\nSe non l’hai creato tu, ignora questa email."),
+    "enter": ("Entrar: {url}\n", "Sign in: {url}\n", "Entrar: {url}\n", "Connexion : {url}\n", "Accedi: {url}\n"),
+    "reset_s": ("Recuperar palavra-passe · {site}", "Recover password · {site}", "Recuperar contraseña · {site}", "Récupérer le mot de passe · {site}", "Recupera password · {site}"),
+    "reset_b": ("Olá {name},\n\nPara definires uma nova palavra-passe abre este link (válido 1 hora):\n{url}\n\nSe não pediste isto, ignora este email.",
+                "Hello {name},\n\nTo set a new password, open this link (valid for 1 hour):\n{url}\n\nIf you did not request this, please ignore this email.",
+                "Hola {name}:\n\nPara definir una nueva contraseña abre este enlace (válido 1 hora):\n{url}\n\nSi no lo has pedido tú, ignora este correo.",
+                "Bonjour {name},\n\nPour définir un nouveau mot de passe, ouvrez ce lien (valable 1 heure) :\n{url}\n\nSi vous n’en êtes pas à l’origine, ignorez cet e-mail.",
+                "Ciao {name},\n\nPer impostare una nuova password apri questo link (valido 1 ora):\n{url}\n\nSe non l’hai richiesto tu, ignora questa email."),
+    "ack_s": ("Recebemos a tua mensagem · {site}", "We received your message · {site}", "Hemos recibido tu mensaje · {site}", "Nous avons reçu votre message · {site}", "Abbiamo ricevuto il tuo messaggio · {site}"),
+    "ack_b": ("Olá {name},\n\nRecebemos a tua mensagem «{subject}». Vamos responder o mais depressa possível.\n\nPodes seguir a conversa aqui:\n{url}\n",
+              "Hello {name},\n\nWe received your message «{subject}». We will reply as soon as possible.\n\nYou can follow the conversation here:\n{url}\n",
+              "Hola {name}:\n\nHemos recibido tu mensaje «{subject}». Responderemos lo antes posible.\n\nPuedes seguir la conversación aquí:\n{url}\n",
+              "Bonjour {name},\n\nNous avons bien reçu votre message «{subject}». Nous répondrons dès que possible.\n\nVous pouvez suivre la conversation ici :\n{url}\n",
+              "Ciao {name},\n\nAbbiamo ricevuto il tuo messaggio «{subject}». Risponderemo il prima possibile.\n\nPuoi seguire la conversazione qui:\n{url}\n"),
+    "reply_s": ("Nova resposta do suporte · {site}", "New reply from support · {site}", "Nueva respuesta del soporte · {site}", "Nouvelle réponse de l’assistance · {site}", "Nuova risposta dall’assistenza · {site}"),
+    "reply_b": ("Olá {name},\n\nRespondemos à tua mensagem «{subject}»:\n\n{reply}\n\nPodes ver a conversa e responder aqui:\n{url}\n",
+                "Hello {name},\n\nWe replied to your message «{subject}»:\n\n{reply}\n\nYou can see the conversation and reply here:\n{url}\n",
+                "Hola {name}:\n\nHemos respondido a tu mensaje «{subject}»:\n\n{reply}\n\nPuedes ver la conversación y responder aquí:\n{url}\n",
+                "Bonjour {name},\n\nNous avons répondu à votre message «{subject}» :\n\n{reply}\n\nVous pouvez voir la conversation et répondre ici :\n{url}\n",
+                "Ciao {name},\n\nAbbiamo risposto al tuo messaggio «{subject}»:\n\n{reply}\n\nPuoi vedere la conversazione e rispondere qui:\n{url}\n"),
+}
+def mail(key, l=None, **kw): return MAIL[key][ORDER.index(l if l in LANGS else lang())].format(**kw)
+
+
+# --- meses
+_MESES = [("janeiro", "January", "enero", "janvier", "gennaio"), ("fevereiro", "February", "febrero", "février", "febbraio"), ("março", "March", "marzo", "mars", "marzo"),
+          ("abril", "April", "abril", "avril", "aprile"), ("maio", "May", "mayo", "mai", "maggio"), ("junho", "June", "junio", "juin", "giugno"),
+          ("julho", "July", "julio", "juillet", "luglio"), ("agosto", "August", "agosto", "août", "agosto"), ("setembro", "September", "septiembre", "septembre", "settembre"),
+          ("outubro", "October", "octubre", "octobre", "ottobre"), ("novembro", "November", "noviembre", "novembre", "novembre"), ("dezembro", "December", "diciembre", "décembre", "dicembre")]
+_ABBR = [("jan", "Jan", "ene", "janv.", "gen"), ("fev", "Feb", "feb", "févr.", "feb"), ("mar", "Mar", "mar", "mars", "mar"), ("abr", "Apr", "abr", "avr.", "apr"),
+         ("mai", "May", "may", "mai", "mag"), ("jun", "Jun", "jun", "juin", "giu"), ("jul", "Jul", "jul", "juil.", "lug"), ("ago", "Aug", "ago", "août", "ago"),
+         ("set", "Sep", "sep", "sept.", "set"), ("out", "Oct", "oct", "oct.", "ott"), ("nov", "Nov", "nov", "nov.", "nov"), ("dez", "Dec", "dic", "déc.", "dic")]
+
+
+def _entries():
+    seen = {}
+    for row in P:
+        assert len(row) == 5, row
+        seen.setdefault(row[0], row)       # repetidos: fica o primeiro (sao identicos)
+    for row in _MESES:
+        seen[row[0]] = row
+        cap = tuple(x[:1].upper() + x[1:] for x in row)
+        seen[cap[0]] = cap
+        seen[row[0]] = (row[0],) + (row[1],) + tuple(row[2:])    # en com maiuscula, restantes minusculas
+    for row in _ABBR: seen[row[0]] = row
+    return list(seen.values())
+
+
+_IDX = {}
+def _index(l):
+    if l not in _IDX:
+        i = ORDER.index(l); d = {}
+        for row in _entries(): d.setdefault(row[0][0], []).append((row[0], row[i]))
+        for v in d.values(): v.sort(key=lambda kv: -len(kv[0]))
+        _IDX[l] = d
+    return _IDX[l]
+
+
+def _word(c): return c.isalnum() or c == "_"
+
+def _tr(s, l):
+    idx = _index(l); out = []; i = 0; n = len(s)
+    while i < n:
+        c = s[i]; hit = None
+        for k, v in idx.get(c, ()):
+            if not s.startswith(k, i): continue
+            j = i + len(k)
+            if _word(k[0]) and i > 0 and _word(s[i - 1]): continue
+            if _word(k[-1]) and j < n and _word(s[j]): continue
+            hit = (k, v); break
+        if hit: out.append(hit[1]); i += len(hit[0])
+        else: out.append(c); i += 1
+    return "".join(out)
+
+
+def tx(s):
+    """Traduz um texto simples (sem HTML)."""
+    l = lang()
+    return s if l == "pt" else _tr(s, l)
+
+def T(s):
+    """Traduz e marca como ja traduzido (para usar dentro de HTML)."""
+    return M0 + tx(s) + M1
+
+
+_TOK = re.compile(r"(<script\b.*?</script>|<style\b.*?</style>|<[^>]*>)", re.S | re.I)
+_ATTR = re.compile(r'\b(placeholder|title|aria-label|alt)="([^"]*)"')
+_MARK = re.compile("(" + M0 + ".*?" + M1 + ")", re.S)
+
+def _seg(s, l):
+    if M0 not in s: return _tr(s, l)
+    return "".join(p if p.startswith(M0) else _tr(p, l) for p in _MARK.split(s))
+
+def _html(h, l):
+    out = []
+    for i, part in enumerate(_TOK.split(h)):
+        if i % 2 == 0: out.append(_seg(part, l))
+        elif part[:7].lower() == "<script": out.append(part)
+        elif part[:6].lower() == "<style": out.append(part)
+        else: out.append(_ATTR.sub(lambda m: f'{m.group(1)}="{_seg(m.group(2), l)}"', part))
+    return "".join(out)
+
+
+def finish(h):
+    """Traduz a pagina (se preciso) e remove as marcas."""
+    l = lang()
+    if l != "pt": h = _html(h, l)
+    return h.replace(M0, "").replace(M1, "")
