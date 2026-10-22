@@ -548,6 +548,9 @@ P += [
     ("iPhone/iPad (Safari):", "iPhone/iPad (Safari):", "iPhone/iPad (Safari):", "iPhone/iPad (Safari) :", "iPhone/iPad (Safari):"),
     ("botão Partilhar → «Adicionar ao ecrã principal».", "Share button → “Add to Home Screen”.", "botón Compartir → «Añadir a pantalla de inicio».", "bouton Partager → « Sur l’écran d’accueil ».", "pulsante Condividi → «Aggiungi alla schermata Home»."),
 ]
+from guide import ROWS as _GUIDE
+P += _GUIDE
+P += [("Como funciona", "How it works", "Cómo funciona", "Comment ça marche", "Come funziona")]
 # --- e-mails (pt, en, es, fr, it) com {marcadores}
 MAIL = {
     "welcome_s": ("Bem-vindo à {site}", "Welcome to {site}", "Bienvenido a {site}", "Bienvenue sur {site}", "Benvenuto su {site}"),

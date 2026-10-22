@@ -8,7 +8,7 @@ from email.utils import formataddr
 from http import cookies
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs, quote
-import i18n, ws
+import i18n, ws, guide
 from i18n import tx, M0, M1
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -431,6 +431,7 @@ code,textarea.mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.
 .me{overflow:hidden;position:relative}.me img{width:100%;height:100%;object-fit:cover;display:block}.bell{position:relative;display:inline-flex}.bell svg{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 .bell .nb{position:absolute;top:-6px;right:-8px;margin:0}.avset{display:flex;gap:16px;align-items:center;flex-wrap:wrap}.avset .av{width:72px;height:72px;font-size:1.5rem}
 @media(max-width:820px){.main.chat{padding:0}.cw{grid-template-columns:1fr;height:calc(100dvh - 56px - 68px);border-radius:0;border-left:0;border-right:0}.cw.open .cl{display:none}.cw:not(.open) .crm{display:none}.rh .back,.gnew .back{display:block}}
+.gc{display:flex;gap:14px;align-items:center;text-decoration:none;color:inherit;margin-bottom:10px}.gc:hover{border-color:var(--brand)}.gn{width:30px;height:30px;border-radius:50%;background:var(--brand);color:#fff;display:grid;place-items:center;font-weight:700;font-size:.85rem;flex:none}.gi2{font-size:1.5rem}.gt p,.gt li{font-size:1.02rem;line-height:1.55}.gt li{margin:8px 0}
 .nb[hidden]{display:none}.av.s{width:18px;height:18px;font-size:.6rem;border-radius:50%;vertical-align:middle;margin-right:5px;display:inline-grid;place-items:center;object-fit:cover}
 .mi{display:block;max-width:100%;max-height:300px;border-radius:10px;margin:2px 0 4px;cursor:zoom-in}.mx{color:var(--mut);font-style:italic}
 .rc .ib{font-size:1.35rem;padding:4px 8px;background:none;border:0;color:var(--mut)}.rc{position:relative;align-items:center}
@@ -462,7 +463,7 @@ def langbar(full=False):
 
 def foot(n=0):
     b = f' <span class="bd s">{n}</span>' if n else ""
-    return (f'<footer class="ft">{langbar()}<div class="fl"><a href="/support">Suporte{b}</a><a href="/about">Sobre</a></div>'
+    return (f'<footer class="ft">{langbar()}<div class="fl"><a href="/support">Suporte{b}</a><a href="/guide">Como funciona</a><a href="/about">Sobre</a></div>'
             f'<div class="m">Feito por Daniel Nunes · Made in Portugal {FLAG}</div></footer>')
 
 def head(t, c):
@@ -482,9 +483,9 @@ def page(title, body, active, u):
     adm = f'<a class="nl acct{" on" if active == "/notifications" else ""}" href="/notifications"><svg viewBox="0 0 24 24">{IC["bell"]}</svg><span>Novidades</span>{nbn}</a>' + adm
     madm = f'<a class="btn bell" style="padding:5px 10px" href="/notifications" aria-label="Novidades"><svg viewBox="0 0 24 24">{IC["bell"]}</svg>{nbn}</a>' + madm
     acct = f'<a class="nl acct{" on" if active == "/settings" else ""}" href="/settings"><svg viewBox="0 0 24 24">{IC["gear"]}</svg><span>{e(u["name"] or u["username"])}</span></a>'
-    top = (f'<div class="top"><a class="brand" href="/">{lg}{sn}</a><div style="display:flex;gap:10px;align-items:center">{madm}'
+    top = (f'<div class="top"><a class="brand" href="/guide" title="Como funciona">{lg}{sn}</a><div style="display:flex;gap:10px;align-items:center">{madm}'
            f'<a class="me" href="/settings" aria-label="Conta">{f'<img src="/avatar/{u["id"]}?v={u["av_v"]}" alt="">' if u["av_v"] else e(ini(u["name"] or u["username"]))}</a></div></div>')
-    return (head(eh(title) + " · " + sn, c) + f'<div class="shell"><nav class="side"><a class="brand" href="/">{lg}{sn}</a>{nav}<div class="sp"></div>{adm}{acct}</nav>'
+    return (head(eh(title) + " · " + sn, c) + f'<div class="shell"><nav class="side"><a class="brand" href="/guide" title="Como funciona">{lg}{sn}</a>{nav}<div class="sp"></div>{adm}{acct}</nav>'
             f'<div>{top}<main class="main{" chat" if active == "/chat" else ""}">{"" if active == "/chat" else ad_html(c, "app")}{body}{"" if active == "/chat" else foot(nu)}</main></div>'
             f'<div id="i18n" hidden data-online="{eh(tx("online"))}" data-seen="{eh(tx("visto por último"))}" data-typing="{eh(tx("a escrever..."))}" data-today="{eh(tx("Hoje"))}" data-yest="{eh(tx("Ontem"))}" data-gone="{eh(tx("Imagem expirada"))}"></div>'
             f'<script src="/app.js?v={JSV}" data-uid="{u["id"]}" defer></script></body></html>')
@@ -498,12 +499,12 @@ def auth_page(title, inner):
     c = cfg(); sn = e(c["site_name"]); lg = logo(c)
     ht = eh(c["hero_title"]) if c["hero_title"] == DEFAULTS["hero_title"] else e(c["hero_title"])
     hx = eh(c["hero_text"]) if c["hero_text"] == DEFAULTS["hero_text"] else e(c["hero_text"])
-    return (head(eh(title) + " · " + sn, c) + f'<div class="auth"><section class="hero"><a class="brand" href="/">{lg}{sn}</a>'
+    return (head(eh(title) + " · " + sn, c) + f'<div class="auth"><section class="hero"><a class="brand" href="/guide" title="Como funciona">{lg}{sn}</a>'
             f'<h1>{ht}</h1><p>{hx}</p>{TL}</section><section class="ap"><div class="ac">{inner}{ad_html(c, "auth")}{foot()}</div></section></div></body></html>')
 
 def pub_page(title, body):
     c = cfg(); sn = e(c["site_name"]); lg = logo(c)
-    return head(eh(title) + " · " + sn, c) + f'<div class="pub"><a class="brand" href="/">{lg}{sn}</a><main>{ad_html(c, "auth")}{body}{foot()}</main></div></body></html>'
+    return head(eh(title) + " · " + sn, c) + f'<div class="pub"><a class="brand" href="/guide" title="Como funciona">{lg}{sn}</a><main>{ad_html(c, "auth")}{body}{foot()}</main></div></body></html>'
 
 def uname(r): return (r["name"] or r["username"]) if r else "?"
 IC["bell"] = '<path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/>'
@@ -717,6 +718,9 @@ class H(BaseHTTPRequestHandler):
             if u: return self.go("/")
             return self.out({"/login": lambda: self.login_page(ok=g("ok")), "/register": self.register_page, "/forgot": self.forgot_page, "/reset": lambda: self.reset_page(g("t"))}[p]())
         if p == "/ws": return self.websocket(u)
+        if p == "/guide" or p.startswith("/guide/"):
+            try: return self.out(self.guide_page(u, p))
+            except (ValueError, IndexError): return self.out(shell("Não encontrado", "<h1>Página não encontrada</h1>", u), 404)
         if p == "/about" or p.startswith("/support"):
             try: return self.out(self.about(u) if p == "/about" else self.support_get(u, p, g))
             except (ValueError, KeyError, IndexError): return self.out(shell("Não encontrado", "<h1>Página não encontrada</h1>", u), 404)
@@ -1547,6 +1551,24 @@ class H(BaseHTTPRequestHandler):
         self.go("/chat")
 
     # ---- sobre e suporte (público)
+    def guide_page(self, u, p):
+        G = guide; n = len(G.TOPICS); parts = p.strip("/").split("/")
+        if len(parts) == 1:
+            cards = "".join(f'<a class="card gc" href="/guide/{i + 1}"><span class="gn">{i + 1}</span><span class="gi2">{t[0]}</span><span class="ct"><b>{eh(t[1][0])}</b><small>{eh(t[2][0])}</small></span><span class="m">›</span></a>' for i, t in enumerate(G.TOPICS))
+            go = '<a class="btn p" href="/">' + eh(G.UI["home"][0]) + '</a>' if u else '<a class="btn p" href="/login">' + eh(G.UI["login"][0]) + '</a>'
+            return shell(G.UI["title"][0], f'<h1>{eh(G.UI["title"][0])}</h1><p class="sub">{eh(G.UI["sub"][0])}</p><div class="card ab"><p style="margin:0">{eh(G.UI["intro"][0])}</p></div>{cards}'
+                         f'<p style="margin:18px 0">{go}</p><div class="card"><p style="margin:0 0 12px">{eh(G.UI["help"][0])}</p><a class="btn" href="/support">{eh("Falar com o suporte")}</a></div>', u, "/guide")
+        i = int(parts[1]) - 1
+        if len(parts) != 2 or not 0 <= i < n: raise ValueError
+        ico, t, _s, body = G.TOPICS[i]; out, ul = [], []
+        for k, tx_ in body:
+            if k == "li": ul.append(f"<li>{eh(tx_[0])}</li>"); continue
+            if ul: out.append("<ul>" + "".join(ul) + "</ul>"); ul = []
+            out.append(f"<p>{eh(tx_[0])}</p>")
+        if ul: out.append("<ul>" + "".join(ul) + "</ul>")
+        nav = (f'<a class="btn" href="/guide/{i}">‹ {eh(G.UI["prev"][0])}</a>' if i else "") + f'<a class="btn" href="/guide">{eh(G.UI["index"][0])}</a>' + (f'<a class="btn p" href="/guide/{i + 2}">{eh(G.UI["next"][0])} ›</a>' if i + 1 < n else "")
+        return shell(t[0], f'<p class="m"><a href="/guide">‹ {eh(G.UI["title"][0])}</a> · {i + 1}/{n}</p><h1><span class="gi2">{ico}</span> {eh(t[0])}</h1><div class="card ab gt">{"".join(out)}</div><div class="row2" style="justify-content:space-between">{nav}</div>', u, "/guide")
+
     def about(self, u):
         c = cfg(); sn = e(c["site_name"])
         li = "".join(f"<li>{eh(x)}</li>" for x in ("Organizar eventos, incluindo trabalhos de vários dias e com vários valores.", "Guardar clientes com logótipo, valores acordados e condições de pagamento.",
