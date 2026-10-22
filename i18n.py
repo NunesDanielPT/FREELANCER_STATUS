@@ -559,6 +559,19 @@ P += [
     ("Vê como agendar o primeiro", "See how to schedule your first one", "Mira cómo programar el primero", "Voir comment planifier le premier", "Scopri come pianificare il primo"),
     ("Fechar", "Close", "Cerrar", "Fermer", "Chiudi"),
 ]
+P += [
+    ("Data da fatura", "Invoice date", "Fecha de la factura", "Date de facture", "Data della fattura"),
+    ("Datas", "Dates", "Fechas", "Dates", "Date"),
+    ("Adicionar ao ecrã principal", "Add to Home Screen", "Añadir a pantalla de inicio", "Sur l’écran d’accueil", "Aggiungi alla schermata Home"),
+    ("Outras agendas", "Other calendars", "Otros calendarios", "Autres agendas", "Altri calendari"),
+    ("A partir do URL", "From URL", "Desde URL", "À partir de l’URL", "Da URL"),
+    ("Copiar", "Copy", "Copiar", "Copier", "Copia"),
+    ("Pode demorar horas", "It may take hours", "Puede tardar horas", "Cela peut prendre des heures", "Può richiedere ore"),
+]
+P += [
+    ("Valor", "Amount", "Importe", "Montant", "Importo"),
+    ("Escolher imagem", "Choose image", "Elegir imagen", "Choisir une image", "Scegli immagine"),
+]
 # --- e-mails (pt, en, es, fr, it) com {marcadores}
 MAIL = {
     "welcome_s": ("Bem-vindo à {site}", "Welcome to {site}", "Bienvenido a {site}", "Bienvenue sur {site}", "Benvenuto su {site}"),

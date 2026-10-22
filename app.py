@@ -8,7 +8,7 @@ from email.utils import formataddr
 from http import cookies
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs, quote
-import i18n, ws, guide
+import i18n, ws, guide, guide_art
 from i18n import tx, M0, M1
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -378,6 +378,7 @@ details summary{cursor:pointer;color:var(--todo);margin-top:18px}.msg{padding:10
 .er{flex-wrap:wrap}.ea{width:100%;justify-content:space-between}:root{--lh:20px}.bar{font-size:.68rem;padding:0 4px}.cell{padding:3px 4px;font-size:.74rem}.wk{min-height:84px}
 .auth{grid-template-columns:1fr}.hero{padding:24px 18px;gap:12px}.hero .tl,.hero .lgd,.hero p{display:none}.hero h1{font-size:1.5rem}.g2{grid-template-columns:1fr}.it{grid-template-columns:1fr 110px}.hb{grid-template-columns:90px 1fr auto}}
 """
+CSS += guide_art.CSS
 
 CSS += """
 .adw{margin:0 0 18px}.adw small{display:block;color:var(--mut);font-size:.7rem;margin-bottom:3px}
@@ -1574,7 +1575,7 @@ class H(BaseHTTPRequestHandler):
             out.append(f"<p>{eh(tx_[0])}</p>")
         if ul: out.append("<ul>" + "".join(ul) + "</ul>")
         nav = (f'<a class="btn" href="/guide/{i}">‹ {eh(G.UI["prev"][0])}</a>' if i else "") + f'<a class="btn" href="/guide">{eh(G.UI["index"][0])}</a>' + (f'<a class="btn p" href="/guide/{i + 2}">{eh(G.UI["next"][0])} ›</a>' if i + 1 < n else "")
-        return shell(t[0], f'<p class="m"><a href="/guide">‹ {eh(G.UI["title"][0])}</a> · {i + 1}/{n}</p><h1><span class="gi2">{ico}</span> {eh(t[0])}</h1><div class="card ab gt">{"".join(out)}</div><div class="row2" style="justify-content:space-between">{nav}</div>', u, "/guide")
+        return shell(t[0], f'<p class="m"><a href="/guide">‹ {eh(G.UI["title"][0])}</a> · {i + 1}/{n}</p><h1><span class="gi2">{ico}</span> {eh(t[0])}</h1>{guide_art.SCENES[i]()}<div class="card ab gt">{"".join(out)}</div><div class="row2" style="justify-content:space-between">{nav}</div>', u, "/guide")
 
     def about(self, u):
         c = cfg(); sn = e(c["site_name"])
