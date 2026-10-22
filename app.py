@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Claquete - organizador de eventos e faturas para freelancers (so biblioteca standard)."""
-import os, re, ssl, time, math, hmac, html, hashlib, secrets, sqlite3, smtplib, calendar, threading
+import os, re, ssl, time, math, hmac, html, hashlib, secrets, sqlite3, smtplib, calendar, threading, struct, zlib
+from functools import lru_cache
 import datetime as dt
 from email.message import EmailMessage
 from email.utils import formataddr
@@ -53,6 +54,174 @@ def run(q, a=()):
         cur = c.execute(q, a); c.commit(); return cur.lastrowid
     finally: c.close()
 
+BACKUP_DIR = os.path.join(os.path.dirname(DB), "backups")
+BK_RE = r"^claquete-\d{8}-\d{6}-[a-z]+\.db$"
+HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
+EMAIL_RE = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
+COLOR_KEYS = ("c_brand", "c_todo", "c_inv", "c_paid")
+DEFAULTS = {
+    "site_name": "Claquete",
+    "hero_title": "Sabe sempre o que falta faturar e o que falta receber.",
+    "hero_text": "Eventos, clientes e faturas num só sítio, feito para freelancers de audiovisual. Não emite faturas: só te ajuda a não perder nenhuma.",
+    "c_brand": "#3b4cdb", "c_todo": "#e5484d", "c_inv": "#f0a020", "c_paid": "#2fa56b",
+    "reg_open": "1", "invite": "",
+    "ad_on": "0", "ad_img": "", "ad_link": "", "ad_text": "", "ad_app": "1", "ad_auth": "0",
+}
+
+# ---------------------------------------------------------------- configuração do site (editável no Admin)
+def cfg():
+    d = dict(DEFAULTS)
+    for r in rows("select k, v from kv where k like 'cfg.%'"): d[r["k"][4:]] = r["v"]
+    for k in COLOR_KEYS:
+        if not HEX.match(d[k] or ""): d[k] = DEFAULTS[k]
+    return d
+
+def set_cfg(d):
+    c = db()
+    try:
+        for k, v in d.items(): c.execute("insert into kv values(?,?) on conflict(k) do update set v=excluded.v", ("cfg." + k, v))
+        c.commit()
+    finally: c.close()
+
+def SN(): return cfg()["site_name"]
+def reg_allowed(c): return c["reg_open"] == "1" or not one("select 1 from users")
+
+def migrate(c):
+    cols = {r[1] for r in c.execute("pragma table_info(users)")}
+    for name, ddl in (("is_admin", "integer default 0"), ("disabled", "integer default 0"), ("last_seen", "text")):
+        if name not in cols: c.execute(f"alter table users add column {name} {ddl}")
+    if not c.execute("select 1 from users where is_admin=1").fetchone():
+        c.execute("update users set is_admin=1 where id=(select min(id) from users)")
+    adm = os.environ.get("ADMIN_USER", "").strip()
+    if adm: c.execute("update users set is_admin=1 where username=?", (adm,))
+    if INVITE and not c.execute("select 1 from kv where k='cfg.invite'").fetchone():
+        c.execute("insert into kv values('cfg.invite',?)", (INVITE,))
+
+# ---------------------------------------------------------------- backups
+def make_backup(tag="manual"):
+    os.makedirs(BACKUP_DIR, exist_ok=True)
+    path = os.path.join(BACKUP_DIR, f"claquete-{dt.datetime.now():%Y%m%d-%H%M%S}-{tag}.db")
+    src, dst = db(), sqlite3.connect(path)
+    try: src.backup(dst)
+    finally: dst.close(); src.close()
+    prune()
+    return path
+
+def list_backups():
+    if not os.path.isdir(BACKUP_DIR): return []
+    return [(fn, os.path.getsize(os.path.join(BACKUP_DIR, fn))) for fn in sorted(os.listdir(BACKUP_DIR), reverse=True) if re.match(BK_RE, fn)]
+
+def prune():
+    groups = {}
+    for fn, _ in list_backups(): groups.setdefault(fn.rsplit("-", 1)[1][:-3], []).append(fn)
+    for tag, fns in groups.items():
+        for fn in fns[(14 if tag == "auto" else 20):]:
+            try: os.remove(os.path.join(BACKUP_DIR, fn))
+            except OSError: pass
+
+def backup_loop():
+    while True:
+        try:
+            day = f"claquete-{dt.date.today():%Y%m%d}-"
+            if not any(fn.startswith(day) and fn.endswith("-auto.db") for fn, _ in list_backups()): make_backup("auto")
+        except Exception as ex: print("ERRO backup automático:", ex, flush=True)
+        time.sleep(3600)
+
+def pl(n, w): return f"{n} {w}" if n == 1 else f"{n} {w}s"
+
+def fsize(b):
+    return f"{b / 1048576:.1f} MB".replace(".", ",") if b >= 1048576 else f"{max(1, round(b / 1024))} KB"
+
+# ---------------------------------------------------------------- tema, logo, favicon
+def rgb(h): return tuple(int(h[i:i + 2], 16) for i in (1, 3, 5))
+def lum(h):
+    f = lambda x: x / 12.92 if x <= .03928 else ((x + .055) / 1.055) ** 2.4
+    r, g, b = (f(x / 255) for x in rgb(h)); return .2126 * r + .7152 * g + .0722 * b
+def on(h): return "#fff" if lum(h) < .22 else "#0d1117"
+def mixhex(h, k=.68): return "#" + "".join(f"{round(x * k + 255 * (1 - k)):02x}" for x in rgb(h))
+
+def theme_css(c):
+    if all(c[k].lower() == DEFAULTS[k] for k in COLOR_KEYS): return ""
+    names = ("brand", "todo", "inv", "paid")
+    def block(P):
+        o = ":root{" + ";".join(f"--{n}:{v}" for n, v in P.items()) + "}"
+        return o + (f".btn.p,button.p,.cell.now span,.me{{color:{on(P['brand'])}}}.chip.on.p2,.bar.paid{{color:{on(P['paid'])}}}"
+                    f".chip.on.f,.bar.inv{{color:{on(P['inv'])}}}.bar.todo{{color:{on(P['todo'])}}}")
+    L = dict(zip(names, (c[k] for k in COLOR_KEYS))); Dk = {n: mixhex(v) for n, v in L.items()}
+    return block(L) + "@media(prefers-color-scheme:dark){" + block(Dk) + "}" + f".hero{{background:color-mix(in srgb,{L['brand']} 24%,#080b1a)}}"
+
+def logo(c, standalone=False):
+    x = ' xmlns="http://www.w3.org/2000/svg"' if standalone else ' class="lg"'
+    return (f'<svg{x} viewBox="0 0 28 28"><rect width="28" height="28" rx="8" fill="{c["c_brand"]}"/><rect x="6" y="7" width="16" height="3.6" rx="1.8" fill="{c["c_todo"]}"/>'
+            f'<rect x="6" y="12.2" width="11" height="3.6" rx="1.8" fill="{c["c_inv"]}"/><rect x="9" y="17.4" width="13" height="3.6" rx="1.8" fill="{c["c_paid"]}"/></svg>')
+
+def fav(c):
+    v = hashlib.sha256("".join(c[k] for k in COLOR_KEYS).encode()).hexdigest()[:6]
+    return (f'<link rel="icon" type="image/svg+xml" href="/favicon.svg?v={v}"><link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png?v={v}">'
+            f'<link rel="apple-touch-icon" href="/apple-touch-icon.png?v={v}">')
+
+@lru_cache(maxsize=32)
+def png_icon(size, cols):
+    base, todo, inv, paid = (rgb(x) for x in cols)
+    shapes = [(0, 0, 28, 28, 8, base), (6, 7, 16, 3.6, 1.8, todo), (6, 12.2, 11, 3.6, 1.8, inv), (9, 17.4, 13, 3.6, 1.8, paid)]
+    def inside(x, y, sx, sy, w, h, r):
+        if x < sx or x > sx + w or y < sy or y > sy + h: return False
+        cx, cy = min(max(x, sx + r), sx + w - r), min(max(y, sy + r), sy + h - r)
+        return (x - cx) ** 2 + (y - cy) ** 2 <= r * r
+    S, k, raw = 3, 28 / size, bytearray()
+    for py in range(size):
+        raw.append(0)
+        for px in range(size):
+            r = g = b = a = 0
+            for sy in range(S):
+                for sx in range(S):
+                    x, y = (px + (sx + .5) / S) * k, (py + (sy + .5) / S) * k
+                    col = None
+                    if inside(x, y, *shapes[0][:5]):
+                        col = shapes[0][5]
+                        for s in shapes[1:]:
+                            if inside(x, y, *s[:5]): col = s[5]
+                    if col: r += col[0]; g += col[1]; b += col[2]; a += 1
+            raw += bytes((r // a, g // a, b // a, 255 * a // (S * S))) if a else b"\0\0\0\0"
+    def chunk(t, d): return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xffffffff)
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 6, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(bytes(raw), 9)) + chunk(b"IEND", b""))
+
+# ---------------------------------------------------------------- publicidade (só banner de imagem ou texto)
+def ad_html(c, where):
+    if c["ad_on"] != "1" or c["ad_" + where] != "1": return ""
+    img, link, txt = c["ad_img"], c["ad_link"], e(c["ad_text"])
+    if not (img or txt): return ""
+    inner = f'<img src="{e(img)}" alt="{txt}" loading="lazy" referrerpolicy="no-referrer">' if img else f"<span>{txt}</span>"
+    box = f'<a class="ad" href="{e(link)}" target="_blank" rel="sponsored noopener noreferrer">{inner}</a>' if link else f'<div class="ad">{inner}</div>'
+    return f'<div class="adw"><small>Publicidade</small>{box}</div>'
+
+# ---------------------------------------------------------------- consola SQL
+def sql_run(q, write):
+    c = db()
+    try:
+        if write: make_backup("presql")
+        else: c.execute("pragma query_only=1")
+        cur = c.execute(q)
+        if cur.description: return [d[0] for d in cur.description], cur.fetchmany(201), ""
+        c.commit(); return None, None, f"Executado. Linhas alteradas: {cur.rowcount}."
+    except sqlite3.Error as ex:
+        m = str(ex)
+        return None, None, ("Esta instrução altera dados. Marca a caixa de confirmação para a executar (é criado um backup antes)." if "readonly" in m else "Erro: " + m)
+    finally: c.close()
+
+def sql_table(cols, data):
+    if cols is None: return ""
+    ki = cols.index("k") if "k" in cols else -1
+    def cell(r, i):
+        v = r[i]
+        if cols[i].lower() in ("pw", "h") or (ki >= 0 and r[ki] == "secret" and cols[i] == "v"): return "•••"
+        return e("" if v is None else str(v)[:120])
+    th = "".join(f'<th class="l">{e(c)}</th>' for c in cols)
+    tr = "".join("<tr>" + "".join(f'<td class="l">{cell(r, i)}</td>' for i in range(len(cols))) + "</tr>" for r in data[:200])
+    more = '<p class="m">A mostrar as primeiras 200 linhas.</p>' if len(data) > 200 else ""
+    return f'<div class="card sc"><table class="tb"><tr>{th}</tr>{tr or "<tr><td class=l>Sem resultados.</td></tr>"}</table></div>{more}'
+
 def init():
     os.makedirs(os.path.dirname(DB), exist_ok=True)
     c = db()
@@ -69,6 +238,7 @@ def init():
     create table if not exists kv(k text primary key, v text);""")
     if not c.execute("select 1 from kv where k='secret'").fetchone():
         c.execute("insert into kv values('secret',?)", (secrets.token_hex(32),))
+    migrate(c)
     c.commit(); c.close()
 
 def sign(s): return hmac.new(one("select v from kv where k='secret'")["v"].encode(), s.encode(), hashlib.sha256).hexdigest()
@@ -87,7 +257,7 @@ def smtp_ready(): return bool(os.environ.get("SMTP_USER") and os.environ.get("SM
 def send_mail(to, subject, body):
     try:
         user = os.environ["SMTP_USER"]; m = EmailMessage()
-        m["From"] = formataddr(("Claquete", os.environ.get("SMTP_FROM") or user)); m["To"] = to; m["Subject"] = subject; m.set_content(body)
+        m["From"] = formataddr((SN(), os.environ.get("SMTP_FROM") or user)); m["To"] = to; m["Subject"] = subject; m.set_content(body)
         h, port = os.environ.get("SMTP_HOST") or "smtp.gmail.com", int(os.environ.get("SMTP_PORT") or 587); ctx = ssl.create_default_context()
         if port == 465: s = smtplib.SMTP_SSL(h, port, timeout=20, context=ctx)
         else: s = smtplib.SMTP(h, port, timeout=20); s.starttls(context=ctx)
@@ -168,6 +338,21 @@ details summary{cursor:pointer;color:var(--todo);margin-top:18px}.msg{padding:10
 .auth{grid-template-columns:1fr}.hero{padding:24px 18px;gap:12px}.hero .tl,.hero .lgd,.hero p{display:none}.hero h1{font-size:1.5rem}.g2{grid-template-columns:1fr}.it{grid-template-columns:1fr 110px}.hb{grid-template-columns:90px 1fr auto}}
 """
 
+CSS += """
+.adw{margin:0 0 18px}.adw small{display:block;color:var(--mut);font-size:.7rem;margin-bottom:3px}
+.ad{display:block;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--sf);text-decoration:none;text-align:center}
+.ad img{display:block;margin:0 auto;max-width:100%;max-height:120px;object-fit:contain}.ad span{display:block;padding:12px 14px;font-weight:600}
+.tb td.l,.tb th.l{text-align:left}.tb td a{text-decoration:none}
+.bd{font-size:.72rem;font-weight:700;padding:2px 8px;border-radius:99px;background:var(--line);color:var(--mut)}
+.bd.a{background:color-mix(in srgb,var(--brand) 18%,transparent);color:var(--brand)}.bd.s{background:color-mix(in srgb,var(--todo) 18%,transparent);color:var(--todo)}
+.g4{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}form.f .g4 input[type=color]{padding:3px;height:44px;cursor:pointer}
+.pre{display:flex;gap:6px;flex-wrap:wrap;margin:10px 0}.pre button{font-size:.85rem;padding:6px 12px}
+code,textarea.mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.88rem}
+.bk{display:flex;justify-content:space-between;gap:10px;align-items:center;padding:9px 0;border-top:1px solid var(--line)}.bk:first-of-type{border-top:0}
+.row2{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.row2 form{margin:0}
+@media(max-width:820px){.g4{grid-template-columns:1fr 1fr}}
+"""
+
 IC = {"home": '<path d="M3 11l9-8 9 8v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>',
       "cal": '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>',
       "list": '<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>',
@@ -175,14 +360,22 @@ IC = {"home": '<path d="M3 11l9-8 9 8v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z
       "chart": '<path d="M5 20V11M12 20V4M19 20v-6"/>',
       "gear": '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9L7 7M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"/>'}
 NAV = [("/", "Início", "home"), ("/calendar", "Calendário", "cal"), ("/events", "Eventos", "list"), ("/clients", "Clientes", "users"), ("/stats", "Estatísticas", "chart")]
-LOGO = '<svg class="lg" viewBox="0 0 28 28"><rect width="28" height="28" rx="8" fill="#3b4cdb"/><rect x="6" y="7" width="16" height="3.6" rx="1.8" fill="#e5484d"/><rect x="6" y="12.2" width="11" height="3.6" rx="1.8" fill="#f0a020"/><rect x="9" y="17.4" width="13" height="3.6" rx="1.8" fill="#2fa56b"/></svg>'
-def head(t): return '<!doctype html><html lang="pt"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#3b4cdb"><title>' + t + '</title><style>' + CSS + '</style></head><body>'
+IC["shield"] = '<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M9 12l2 2 4-4"/>'
+
+def head(t, c):
+    return ('<!doctype html><html lang="pt"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="'
+            + c["c_brand"] + '"><title>' + t + '</title>' + fav(c) + '<style>' + CSS + theme_css(c) + '</style></head><body>')
 
 def page(title, body, active, u):
+    c = cfg(); sn = e(c["site_name"]); lg = logo(c)
     nav = "".join(f'<a class="nl{" on" if h == active else ""}" href="{h}"><svg viewBox="0 0 24 24">{IC[i]}</svg><span>{n}</span></a>' for h, n, i in NAV)
+    adm = f'<a class="nl acct{" on" if active == "/admin" else ""}" href="/admin"><svg viewBox="0 0 24 24">{IC["shield"]}</svg><span>Admin</span></a>' if u["is_admin"] else ""
+    madm = '<a class="btn" style="padding:4px 12px" href="/admin">Admin</a>' if u["is_admin"] else ""
     acct = f'<a class="nl acct{" on" if active == "/settings" else ""}" href="/settings"><svg viewBox="0 0 24 24">{IC["gear"]}</svg><span>{e(u["name"] or u["username"])}</span></a>'
-    top = f'<div class="top"><a class="brand" href="/">{LOGO}Claquete</a><a class="me" href="/settings" aria-label="Conta">{e(ini(u["name"] or u["username"]))}</a></div>'
-    return head(e(title) + " · Claquete") + f'<div class="shell"><nav class="side"><a class="brand" href="/">{LOGO}Claquete</a>{nav}<div class="sp"></div>{acct}</nav><div>{top}<main class="main">{body}</main></div></body></html>'
+    top = (f'<div class="top"><a class="brand" href="/">{lg}{sn}</a><div style="display:flex;gap:10px;align-items:center">{madm}'
+           f'<a class="me" href="/settings" aria-label="Conta">{e(ini(u["name"] or u["username"]))}</a></div></div>')
+    return (head(e(title) + " · " + sn, c) + f'<div class="shell"><nav class="side"><a class="brand" href="/">{lg}{sn}</a>{nav}<div class="sp"></div>{adm}{acct}</nav>'
+            f'<div>{top}<main class="main">{ad_html(c, "app")}{body}</main></div></body></html>')
 
 TL = ('<div class="tl"><div><i class="paid" style="left:2%;width:30%">Casamento</i><i class="inv" style="left:38%;width:24%">Conferência</i></div>'
       '<div><i class="todo" style="left:12%;width:26%">Videoclip</i><i class="paid" style="left:46%;width:40%">Festival · 3 dias</i></div>'
@@ -190,9 +383,9 @@ TL = ('<div class="tl"><div><i class="paid" style="left:2%;width:30%">Casamento<
       '<div class="lgd"><span style="--c:var(--todo)">por faturar</span><span style="--c:var(--inv)">faturada</span><span style="--c:var(--paid)">paga</span></div>')
 
 def auth_page(title, inner):
-    return (head(e(title) + " · Claquete") + f'<div class="auth"><section class="hero"><a class="brand" href="/">{LOGO}Claquete</a>'
-            '<h1>Sabe sempre o que falta faturar e o que falta receber.</h1><p>Eventos, clientes e faturas num só sítio, feito para freelancers de audiovisual. Não emite faturas: só te ajuda a não perder nenhuma.</p>'
-            f'{TL}</section><section class="ap"><div class="ac">{inner}</div></section></div></body></html>')
+    c = cfg(); sn = e(c["site_name"]); lg = logo(c)
+    return (head(e(title) + " · " + sn, c) + f'<div class="auth"><section class="hero"><a class="brand" href="/">{lg}{sn}</a>'
+            f'<h1>{e(c["hero_title"])}</h1><p>{e(c["hero_text"])}</p>{TL}</section><section class="ap"><div class="ac">{inner}{ad_html(c, "auth")}</div></section></div></body></html>')
 
 def fld(label, name, typ="text", val="", extra=""):
     return f'<label>{label}</label><input name="{name}" type="{typ}" value="{e(val)}" {extra}>'
@@ -228,14 +421,17 @@ class H(BaseHTTPRequestHandler):
         m = cookies.SimpleCookie(self.headers.get("Cookie", "")).get("s")
         try:
             i, x, sig = m.value.split("."); u = one("select * from users where id=?", (i,))
-            if u and int(x) > time.time() and hmac.compare_digest(sig, sign(f"{i}.{x}.{u['pw'][-16:]}")): return u
+            if u and not u["disabled"] and int(x) > time.time() and hmac.compare_digest(sig, sign(f"{i}.{x}.{u['pw'][-16:]}")):
+                now = dt.datetime.now().strftime("%Y-%m-%d %H:%M")
+                if (u["last_seen"] or "")[:15] != now[:15]: run("update users set last_seen=? where id=?", (now, u["id"]))
+                return u
         except Exception: pass
         return None
 
     def https(self): return self.headers.get("X-Forwarded-Proto") == "https"
 
     def out(self, body, code=200, ctype="text/html; charset=utf-8", hd=()):
-        n = secrets.token_urlsafe(12); b = body.replace("__NONCE__", n).encode(); self.send_response(code)
+        n = secrets.token_urlsafe(12); b = body if isinstance(body, bytes) else body.replace("__NONCE__", n).encode(); self.send_response(code)
         for k, v in (("Content-Type", ctype), ("Content-Length", str(len(b))), ("X-Frame-Options", "DENY"), ("X-Content-Type-Options", "nosniff"), ("Referrer-Policy", "same-origin"),
                      ("Content-Security-Policy", f"default-src 'self'; style-src 'unsafe-inline'; script-src 'nonce-{n}'; img-src 'self' https: data:; form-action 'self'; frame-ancestors 'none'"), *hd):
             self.send_header(k, v)
@@ -249,6 +445,7 @@ class H(BaseHTTPRequestHandler):
     def do_GET(self):
         u_ = urlparse(self.path); q = parse_qs(u_.query); p = u_.path; g = lambda k, d="": q.get(k, [d])[0]
         if p == "/calendar.ics": return self.ics(g("k"))
+        if p in ("/favicon.svg", "/favicon.ico", "/favicon-32.png", "/apple-touch-icon.png"): return self.icon(p)
         u = self.user()
         if p in ("/login", "/register", "/forgot", "/reset"):
             if u: return self.go("/")
@@ -256,6 +453,7 @@ class H(BaseHTTPRequestHandler):
         if not u: return self.go("/login")
         parts = p.strip("/").split("/")
         try:
+            if parts[0] == "admin": return self.admin_get(u, p, parts, g)
             if p == "/": return self.out(self.home(u, g("m")))
             if p == "/calendar": return self.out(self.cal(u, g("m")))
             if p == "/events": return self.out(self.events(u, g("f", "todos")))
@@ -271,6 +469,7 @@ class H(BaseHTTPRequestHandler):
         org, sf = self.headers.get("Origin"), self.headers.get("Sec-Fetch-Site")
         hosts = (self.headers.get("Host"), self.headers.get("X-Forwarded-Host"))
         if sf == "cross-site" or (not sf and org not in (None, "null") and urlparse(org).netloc not in hosts): return self.out("Pedido recusado", 403, "text/plain")
+        if urlparse(self.path).path == "/admin/db/restore": return self.restore()
         n = int(self.headers.get("Content-Length", 0) or 0)
         self.fl = parse_qs(self.rfile.read(min(n, 200000)).decode(), keep_blank_values=True); f = {k: v[0] for k, v in self.fl.items()}
         p = urlparse(self.path).path; parts = p.strip("/").split("/")
@@ -279,6 +478,7 @@ class H(BaseHTTPRequestHandler):
         u = self.user()
         if not u: return self.go("/login")
         if p == "/logout": return self.go("/login", [("Set-Cookie", "s=; Max-Age=0; Path=/")])
+        if parts[0] == "admin": return self.admin_post(u, p, parts, f)
         i = u["id"]; nxt = f.get("next", "/"); nxt = nxt if nxt.startswith("/") and not nxt.startswith("//") else "/"
         if parts[0] == "toggle" and len(parts) == 3:
             r = one("select * from events where id=? and user_id=?", (parts[1], i)); t = today().isoformat()
@@ -302,6 +502,7 @@ class H(BaseHTTPRequestHandler):
             return self.go("/clients")
         if parts[0] == "client" and len(parts) == 3 and parts[2] == "delete":
             run("delete from clients where id=? and user_id=?", (parts[1], i)); return self.go("/clients")
+        if p == "/settings/ics": run("update users set ics=? where id=?", (secrets.token_hex(20), i)); return self.go("/settings?ok=ics")
         if p == "/settings/profile": return self.save_profile(u, f)
         if p == "/settings/password": return self.save_password(u, f)
         self.go("/")
@@ -318,12 +519,14 @@ class H(BaseHTTPRequestHandler):
         if n >= 8 and time.time() - t < 300: return self.out(self.login_page("Demasiadas tentativas. Espera 5 minutos."), 429)
         x = f.get("u", "").strip(); u = one("select * from users where username=? or email=?", (x, x))
         if u and check_pw(f.get("p", ""), u["pw"]):
+            if u["disabled"]: return self.out(self.login_page("Esta conta está suspensa. Fala com o administrador."), 403)
             self.fails.pop(ip, None); return self.go("/", [session_cookie(u, self.https())])
         self.fails[ip] = (n + 1, time.time()); self.out(self.login_page("Utilizador ou palavra-passe incorretos."), 401)
 
     def register_page(self, err="", v=None):
-        v = v or {}
-        inv = fld("Código de convite", "code", extra="required") if INVITE else ""
+        v = v or {}; c = cfg()
+        if not reg_allowed(c): return auth_page("Registo fechado", '<h1>Registo fechado</h1><p class="sub">De momento não estão a ser criadas contas novas.</p><p class="l2"><a href="/login">Entrar</a></p>')
+        inv = fld("Código de convite", "code", extra="required") if c["invite"] and one("select 1 from users") else ""
         return auth_page("Criar conta", '<h1>Criar conta</h1><p class="sub">Demora menos de um minuto.</p>' + (f'<p class="msg err">{err}</p>' if err else "") + '<form class="f" method="post" action="/register">'
             + fld("Utilizador", "u", val=v.get("u", ""), extra='autocomplete="username" required autofocus') + fld("Email (para recuperar a palavra-passe)", "email", "email", v.get("email", ""), 'autocomplete="email" required')
             + fld("Palavra-passe (mínimo 8 caracteres)", "p", "password", extra='autocomplete="new-password" minlength="8" required') + fld("Repetir palavra-passe", "p2", "password", extra='autocomplete="new-password" minlength="8" required')
@@ -331,16 +534,20 @@ class H(BaseHTTPRequestHandler):
 
     def do_register(self, f):
         v = {"u": f.get("u", "").strip(), "email": f.get("email", "").strip()}; err = ""
-        if INVITE and not hmac.compare_digest(f.get("code", ""), INVITE): err = "Código de convite incorreto."
+        c = cfg()
+        if not reg_allowed(c): err = "O registo está fechado."
+        elif c["invite"] and one("select 1 from users") and not hmac.compare_digest(f.get("code", ""), c["invite"]): err = "Código de convite incorreto."
         elif not re.match(r"^[\w.\-]{3,30}$", v["u"]): err = "O utilizador deve ter 3 a 30 caracteres (letras, números, . _ -)."
         elif not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", v["email"]): err = "Email inválido."
         elif len(f.get("p", "")) < 8: err = "A palavra-passe tem de ter pelo menos 8 caracteres."
         elif f.get("p") != f.get("p2"): err = "As palavras-passe não coincidem."
         if not err:
-            try: uid = run("insert into users(username,email,name,pw,ics,created) values(?,?,?,?,?,?)", (v["u"], v["email"], v["u"], hash_pw(f["p"]), secrets.token_hex(20), today().isoformat()))
+            try:
+                first = 0 if one("select 1 from users") else 1
+                uid = run("insert into users(username,email,name,pw,ics,created,is_admin) values(?,?,?,?,?,?,?)", (v["u"], v["email"], v["u"], hash_pw(f["p"]), secrets.token_hex(20), today().isoformat(), first))
             except sqlite3.IntegrityError: err = "Esse utilizador ou email já está registado."
         if err: return self.out(self.register_page(err, v), 400)
-        mail_async(v["email"], "Bem-vindo à Claquete", f"Olá {v['u']},\n\nA tua conta na Claquete foi criada com sucesso.\n\nUtilizador: {v['u']}\n" + (f"Entrar: {BASE_URL}\n" if BASE_URL else "") + "\nSe não foste tu a criar esta conta, ignora este email.")
+        mail_async(v["email"], f"Bem-vindo à {SN()}", f"Olá {v['u']},\n\nA tua conta na {SN()} foi criada com sucesso.\n\nUtilizador: {v['u']}\n" + (f"Entrar: {BASE_URL}\n" if BASE_URL else "") + "\nSe não foste tu a criar esta conta, ignora este email.")
         self.go("/", [session_cookie(one("select * from users where id=?", (uid,)), self.https())])
 
     def forgot_page(self, sent=False):
@@ -357,7 +564,7 @@ class H(BaseHTTPRequestHandler):
             tok = secrets.token_urlsafe(32); run("delete from resets where user_id=? or exp<?", (u["id"], time.time()))
             run("insert into resets values(?,?,?)", (hashlib.sha256(tok.encode()).hexdigest(), u["id"], int(time.time()) + 3600))
             if BASE_URL and smtp_ready():
-                mail_async(u["email"], "Recuperar palavra-passe · Claquete", f"Olá {u['name']},\n\nPara definires uma nova palavra-passe abre este link (válido 1 hora):\n{BASE_URL}/reset?t={tok}\n\nSe não pediste isto, ignora este email.")
+                mail_async(u["email"], f"Recuperar palavra-passe · {SN()}", f"Olá {u['name']},\n\nPara definires uma nova palavra-passe abre este link (válido 1 hora):\n{BASE_URL}/reset?t={tok}\n\nSe não pediste isto, ignora este email.")
             else: print(f"[RECUPERAÇÃO] email/BASE_URL não configurado. Link para {u['username']}: http://{self.headers.get('Host')}/reset?t={tok}", flush=True)
         self.out(self.forgot_page(True))
 
@@ -372,6 +579,230 @@ class H(BaseHTTPRequestHandler):
         if not r: return self.out(self.reset_page(tok))
         if len(f.get("p", "")) < 8 or f.get("p") != f.get("p2"): return self.out(self.reset_page(tok, "As palavras-passe têm de coincidir e ter 8+ caracteres."), 400)
         run("update users set pw=? where id=?", (hash_pw(f["p"]), r["user_id"])); run("delete from resets where user_id=?", (r["user_id"],)); self.go("/login?ok=reset")
+
+    def icon(self, p):
+        c = cfg(); hd = (("Cache-Control", "public, max-age=86400"),)
+        if p == "/favicon.svg": return self.out(logo(c, True), 200, "image/svg+xml", hd)
+        size = {"/favicon.ico": 48, "/favicon-32.png": 32, "/apple-touch-icon.png": 180}[p]
+        self.out(png_icon(size, tuple(c[k] for k in COLOR_KEYS)), 200, "image/png", hd)
+
+    # ---- admin
+    TABS = [("/admin", "Resumo"), ("/admin/users", "Utilizadores"), ("/admin/site", "Site"), ("/admin/ads", "Publicidade"), ("/admin/db", "Base de dados")]
+    FLASH = {"texts": "Textos e registo guardados.", "colors": "Cores guardadas.", "reset": "Cores repostas.", "ads": "Publicidade guardada.", "user": "Dados guardados.",
+             "pw": "Palavra-passe definida. A pessoa tem de entrar de novo.", "ics": "Link do calendário renovado.", "state": "Estado atualizado.", "snap": "Backup criado."}
+
+    def apage(self, u, tab, body, ok="", err=""):
+        chips = "".join(f'<a class="{"on" if h == tab else ""}" href="{h}">{n}</a>' for h, n in self.TABS)
+        m = f'<p class="msg ok">{e(self.FLASH[ok])}</p>' if ok in self.FLASH else (f'<p class="msg err">{e(err)}</p>' if err else "")
+        return page("Admin", f'<div class="bar-h"><div><h1>Admin</h1><p class="sub" style="margin:0">Gestão do site, das contas e dos dados.</p></div></div><div class="chips">{chips}</div>{m}{body}', "/admin", u)
+
+    def send_file(self, path):
+        if not os.path.isfile(path): raise ValueError
+        with open(path, "rb") as fh: data = fh.read()
+        self.out(data, 200, "application/octet-stream", (("Content-Disposition", f'attachment; filename="{os.path.basename(path)}"'),))
+
+    def admin_get(self, u, p, parts, g):
+        if not u["is_admin"]: raise ValueError
+        if p == "/admin": return self.out(self.a_home(u))
+        if p == "/admin/users": return self.out(self.a_users(u))
+        if p == "/admin/site": return self.out(self.a_site(u, g("ok")))
+        if p == "/admin/ads": return self.out(self.a_ads(u, g("ok")))
+        if p == "/admin/db": return self.out(self.a_db(u, g("ok"), g("t")))
+        if p == "/admin/backup.db": return self.send_file(make_backup("manual"))
+        if len(parts) == 3 and parts[1] == "user": return self.out(self.a_user(u, parts[2], g("ok")))
+        if len(parts) == 3 and parts[1] == "backups" and re.match(BK_RE, parts[2]): return self.send_file(os.path.join(BACKUP_DIR, parts[2]))
+        raise ValueError
+
+    def a_home(self, u):
+        q = lambda s, a=(): one(s, a)[0]
+        wk = (today() - dt.timedelta(7)).isoformat(); c = cfg(); size = os.path.getsize(DB) if os.path.exists(DB) else 0
+        tile = lambda col, lab, val, sub: f'<div class="st" style="--c:{col}"><span>{lab}</span><b>{val}</b><span>{sub}</span></div>'
+        strip = ('<div class="strip">' + tile("var(--brand)", "Contas", q("select count(*) from users"), f'+{q("select count(*) from users where created>=?", (wk,))} nos últimos 7 dias')
+                 + tile("var(--paid)", "Ativas (7 dias)", q("select count(*) from users where last_seen>=?", (wk,)), "com acesso recente")
+                 + tile("var(--inv)", "Eventos", q("select count(*) from events"), pl(q("select count(*) from clients"), "cliente"))
+                 + tile("var(--todo)", "Base de dados", fsize(size), f"{len(list_backups())} backups") + "</div>")
+        w = []
+        if not smtp_ready(): w.append("O envio de emails está desligado (define SMTP_USER e SMTP_PASSWORD no Portainer).")
+        if not BASE_URL: w.append("BASE_URL não está definido: os links nos emails não funcionam.")
+        if c["reg_open"] == "1" and not c["invite"]: w.append("Qualquer pessoa com o endereço do site pode criar conta. Define um código de convite em Site.")
+        wh = ("<ul style='margin:0;padding-left:20px'>" + "".join(f"<li>{e(x)}</li>" for x in w) + "</ul>") if w else '<p class="m" style="margin:0">Tudo em ordem.</p>'
+        rec = "".join(f'<div class="er"><a class="eh" href="/admin/user/{x["id"]}"><span class="av">{e(ini(x["name"] or x["username"]))}</span><div><b>{e(x["name"] or x["username"])}</b>'
+                      f'<small>{e(x["email"])} · registo {e(x["created"])}</small></div></a><span class="m">{e(x["last_seen"] or "nunca entrou")}</span></div>' for x in rows("select * from users order by id desc limit 6"))
+        return self.apage(u, "/admin", f'{strip}<h2>Avisos</h2><div class="card">{wh}</div><h2>Últimas contas</h2><div class="list">{rec}</div><p><a class="btn" href="/admin/users">Ver todas as contas</a></p>')
+
+    def a_users(self, u):
+        us = rows("select u.*, (select count(*) from events where user_id=u.id) ne, (select count(*) from clients where user_id=u.id) nc from users u order by id")
+        bd = lambda x: ('<span class="bd a">Admin</span> ' if x["is_admin"] else "") + ('<span class="bd s">Suspensa</span>' if x["disabled"] else "")
+        tr = "".join(f'<tr><td><a href="/admin/user/{x["id"]}"><b>{e(x["name"] or x["username"])}</b></a><br><span class="m">@{e(x["username"])}</span></td><td class="l">{e(x["email"])}</td>'
+                     f'<td>{e(x["created"])}</td><td>{e(x["last_seen"] or "nunca")}</td><td>{x["ne"]}</td><td>{x["nc"]}</td><td>{bd(x)}</td></tr>' for x in us)
+        return self.apage(u, "/admin/users", f'<p class="m">{len(us)} contas. Clica num nome para editar, mudar o email, repor a palavra-passe ou suspender.</p>'
+                          f'<div class="card sc"><table class="tb"><tr><th>Conta</th><th class="l">Email</th><th>Registo</th><th>Último acesso</th><th>Eventos</th><th>Clientes</th><th></th></tr>{tr}</table></div>')
+
+    def a_user(self, u, tid, ok="", err="", link=""):
+        t = one("select * from users where id=?", (tid,))
+        if not t: raise ValueError
+        ne = one("select count(*) from events where user_id=?", (t["id"],))[0]; nc = one("select count(*) from clients where user_id=?", (t["id"],))[0]
+        me = t["id"] == u["id"]; base = f"/admin/user/{t['id']}"
+        bdg = ('<span class="bd a">Admin</span> ' if t["is_admin"] else "") + ('<span class="bd s">Suspensa</span>' if t["disabled"] else "")
+        btn = lambda act, label, cls="": f'<form method="post" action="{base}/{act}"><button class="{cls}">{label}</button></form>'
+        lk = (f'<div class="card"><b>Link de recuperação (válido 1 hora)</b><p class="m">Envia este link à pessoa para ela escolher uma nova palavra-passe.</p>'
+              f'<input readonly id="lk" value="{e(link)}" style="width:100%;padding:10px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--ink)"></div>') if link else ""
+        return self.apage(u, "/admin/users", (
+            f'<p><a href="/admin/users" class="m">‹ Todas as contas</a></p>{lk}'
+            f'<div class="card"><div class="row2"><span class="av">{e(ini(t["name"] or t["username"]))}</span><div><b>{e(t["name"] or t["username"])}</b> {bdg}'
+            f'<div class="m">Registo {e(t["created"])} · último acesso {e(t["last_seen"] or "nunca")} · {pl(ne, "evento")} · {pl(nc, "cliente")}</div></div></div></div>'
+            f'<form class="f card" method="post" action="{base}/save"><h2>Dados da conta</h2>' + fld("Utilizador", "username", val=t["username"], extra="required") + fld("Nome", "name", val=t["name"], extra="required")
+            + fld("Email", "email", "email", t["email"], "required") + fld("Telemóvel", "phone", "tel", t["phone"] or "") + '<p><button class="p">Guardar</button></p></form>'
+            f'<div class="card"><h2>Acesso</h2><div class="row2">{btn("link", "Gerar link de recuperação")}{btn("ics", "Renovar link do calendário")}</div>'
+            f'<form class="f" method="post" action="{base}/password" style="margin-top:14px"><label>Definir nova palavra-passe (mínimo 8)</label><div class="row2"><input name="p" type="text" minlength="8" autocomplete="off" required style="flex:1;min-width:200px"><button>Definir</button></div></form></div>'
+            f'<div class="card"><h2>Estado</h2><div class="row2">{btn("admin", "Remover admin" if t["is_admin"] else "Tornar admin")}{btn("disable", "Reativar conta" if t["disabled"] else "Suspender conta", "d")}</div>'
+            f'<p class="m">Uma conta suspensa não consegue entrar, mas os dados ficam guardados.</p></div>'
+            f'<details><summary>Apagar conta e todos os dados</summary><form class="f" method="post" action="{base}/delete"><p class="m">Apaga a conta, {pl(ne, "evento")} e {pl(nc, "cliente")}. Não dá para desfazer (só com um backup). '
+            f'Escreve <b>{e(t["username"])}</b> para confirmar.</p><input name="confirm" autocomplete="off" required><p><button class="d">Apagar definitivamente</button></p></form></details>'), ok, err)
+
+    def a_site(self, u, ok=""):
+        c = cfg(); ck = lambda k: "checked" if c[k] == "1" else ""
+        presets = [("Azul", "#3b4cdb,#e5484d,#f0a020,#2fa56b"), ("Esmeralda", "#0f766e,#e5484d,#f0a020,#2fa56b"), ("Violeta", "#7c3aed,#e11d48,#f59e0b,#16a34a"),
+                   ("Laranja", "#ea580c,#dc2626,#ca8a04,#15803d"), ("Grafite", "#334155,#e5484d,#f0a020,#2fa56b")]
+        pb = "".join(f'<button type="button" data-c="{v}">{n}</button>' for n, v in presets)
+        cin = lambda k, lab: f'<div><label>{lab}</label><input type="color" id="{k}" name="{k}" value="{c[k]}"></div>'
+        lg = logo(c).replace('class="lg"', 'class="lg" id="pvlogo"')
+        return self.apage(u, "/admin/site", (
+            '<form class="f card" method="post" action="/admin/site/texts"><h2>Nomes e textos</h2>' + fld("Nome do site", "site_name", val=c["site_name"], extra='maxlength="40" required')
+            + fld("Título da página de entrada", "hero_title", val=c["hero_title"], extra='maxlength="140"') + f'<label>Texto da página de entrada</label><textarea name="hero_text" rows="3" maxlength="300">{e(c["hero_text"])}</textarea>'
+            f'<label class="c" style="margin-top:16px"><input type="checkbox" name="reg_open" {ck("reg_open")}>Permitir que novas pessoas criem conta</label>'
+            + fld("Código de convite (vazio = sem código)", "invite", val=c["invite"], extra='maxlength="60" autocomplete="off"') + '<p><button class="p">Guardar</button></p></form>'
+            '<form class="f card" method="post" action="/admin/site/colors"><h2>Cores</h2><p class="m">Mudam em todo o site e no ícone do separador. O modo escuro ajusta-se sozinho.</p>'
+            f'<div class="pre">{pb}</div><div class="g4">{cin("c_brand", "Principal")}{cin("c_todo", "Por faturar")}{cin("c_inv", "Faturada")}{cin("c_paid", "Paga")}</div>'
+            f'<div id="pv" class="card" style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin:16px 0 0;--brand:{c["c_brand"]};--todo:{c["c_todo"]};--inv:{c["c_inv"]};--paid:{c["c_paid"]}">{lg}'
+            '<button type="button" class="p">Botão</button><span class="chip on f">✓ Faturada</span><span class="chip on p2">✓ Paga</span><b style="color:var(--todo)">Por faturar</b></div>'
+            '<p class="row2" style="margin-top:14px"><button class="p">Guardar cores</button><button type="submit" formaction="/admin/site/reset" formnovalidate>Repor cores originais</button></p></form>'
+            '<script nonce="__NONCE__">(function(){var ids=["c_brand","c_todo","c_inv","c_paid"],nm=["brand","todo","inv","paid"],pv=document.getElementById("pv"),lr=document.querySelectorAll("#pvlogo rect");'
+            'function upd(){ids.forEach(function(k,i){var v=document.getElementById(k).value;pv.style.setProperty("--"+nm[i],v);lr[i].setAttribute("fill",v)})}'
+            'ids.forEach(function(k){document.getElementById(k).oninput=upd});document.querySelectorAll("[data-c]").forEach(function(b){b.onclick=function(){var v=b.dataset.c.split(",");ids.forEach(function(k,i){document.getElementById(k).value=v[i]});upd()}});upd()})();</script>'), ok)
+
+    def a_ads(self, u, ok=""):
+        c = cfg(); ck = lambda k: "checked" if c[k] == "1" else ""
+        prev = ad_html(dict(c, ad_on="1", ad_app="1"), "app") or '<p class="m">Preenche uma imagem ou um texto para ver a pré-visualização.</p>'
+        return self.apage(u, "/admin/ads", (
+            '<form class="f card" method="post" action="/admin/ads/save"><h2>Banner de publicidade</h2><p class="m">Aparece como um banner com a indicação «Publicidade». Aceita imagem ou texto, com ligação opcional. '
+            'Scripts de anúncios (por exemplo AdSense) ficam bloqueados por segurança.</p>'
+            f'<label class="c"><input type="checkbox" name="ad_on" {ck("ad_on")}>Mostrar publicidade</label>'
+            + fld("URL da imagem (https://...)", "ad_img", "url", c["ad_img"], 'placeholder="https://..."') + fld("Ligação ao clicar (opcional)", "ad_link", "url", c["ad_link"], 'placeholder="https://..."')
+            + fld("Texto (usa-se também como descrição da imagem)", "ad_text", val=c["ad_text"], extra='maxlength="120"')
+            + f'<label>Onde aparece</label><label class="c"><input type="checkbox" name="ad_app" {ck("ad_app")}>Dentro da aplicação (topo de cada página)</label>'
+            f'<label class="c"><input type="checkbox" name="ad_auth" {ck("ad_auth")}>Páginas de entrada e registo</label><p><button class="p">Guardar</button></p></form>'
+            f'<h2>Pré-visualização</h2><div style="max-width:720px">{prev}</div>'), ok)
+
+    def a_db(self, u, ok="", t="", q="", res=None, err=""):
+        tabs = [r["name"] for r in rows("select name from sqlite_master where type='table' and name not like 'sqlite_%' order by name")]
+        cnt = {x: one('select count(*) from "' + x + '"')[0] for x in tabs}
+        chips = "".join(f'<a href="/admin/db?t={x}#sql">{x} ({cnt[x]})</a>' for x in tabs)
+        if res is None and t in tabs:
+            q = f'select * from "{t}" limit 100'; res = sql_run(q, False)
+        cols, data, info = res if res else (None, None, "")
+        bks = "".join(f'<div class="bk"><span><b>{fn[9:13]}-{fn[13:15]}-{fn[15:17]} {fn[18:20]}:{fn[20:22]}</b> <span class="m">· {fn.rsplit("-", 1)[1][:-3]} · {fsize(sz)}</span></span><a class="btn" href="/admin/backups/{fn}">Descarregar</a></div>' for fn, sz in list_backups()[:15]) \
+            or '<p class="m">Ainda não há backups guardados no servidor.</p>'
+        return self.apage(u, "/admin/db", (
+            f'<div class="card"><h2>Backups</h2><p class="m">Há um backup automático por dia (guarda os últimos 14). Ficam na pasta de dados do servidor, por isso descarrega de vez em quando uma cópia para outro sítio.</p>'
+            f'<div class="row2"><a class="btn p" href="/admin/backup.db">Criar e descarregar backup agora</a><form method="post" action="/admin/db/snapshot"><button>Criar backup no servidor</button></form></div><div style="margin-top:12px">{bks}</div></div>'
+            '<form class="f card" id="rf"><h2>Restaurar um backup</h2><p class="m">Substitui <b>toda</b> a base de dados atual pelo ficheiro escolhido (um .db descarregado daqui). É criado um backup do estado atual antes. Depois tens de entrar de novo.</p>'
+            '<input type="file" id="rfile" accept=".db,.sqlite,application/octet-stream" required><p><button class="d" id="rb">Restaurar</button></p></form>'
+            f'<div class="card" id="sql"><h2>Ver e editar dados</h2><p class="m">Tabelas (clica para ver as primeiras 100 linhas):</p><div class="chips">{chips}</div>'
+            f'<form class="f" method="post" action="/admin/db/sql#sql"><textarea name="q" rows="4" class="mono" spellcheck="false">{e(q or "select id, username, email from users")}</textarea>'
+            '<label class="c" style="margin-top:10px"><input type="checkbox" name="confirm">Confirmo que esta instrução pode alterar dados (é criado um backup antes)</label>'
+            '<p class="m">Exemplos: <code>update users set email=\'novo@exemplo.pt\' where id=2</code> · <code>update events set user_id=3 where id=10</code></p><p><button class="p">Executar</button></p></form>'
+            + (f'<p class="msg {"err" if info.startswith(("Erro", "Esta")) else "ok"}">{e(info)}</p>' if info else "") + sql_table(cols, data or []) + '</div>'
+            '<script nonce="__NONCE__">document.getElementById("rf").onsubmit=function(ev){ev.preventDefault();var f=document.getElementById("rfile").files[0],b=document.getElementById("rb");if(!f)return;'
+            'if(!confirm("Isto substitui TODA a base de dados atual pela do ficheiro. Continuar?"))return;b.disabled=true;b.textContent="A restaurar...";'
+            'fetch("/admin/db/restore",{method:"POST",body:f,headers:{"Content-Type":"application/octet-stream"}}).then(function(r){return r.text().then(function(t){if(r.ok){location.href="/login"}else{alert(t);b.disabled=false;b.textContent="Restaurar"}})})'
+            '.catch(function(){alert("Falhou o envio do ficheiro.");b.disabled=false;b.textContent="Restaurar"})};</script>'), ok, err)
+
+    def admin_post(self, u, p, parts, f):
+        if not u["is_admin"]: return self.out(page("Não encontrado", "<h1>Página não encontrada</h1>", "", u), 404)
+        yes = lambda k: "1" if f.get(k) else "0"
+        if p == "/admin/site/texts":
+            set_cfg({"site_name": f.get("site_name", "").strip()[:40] or DEFAULTS["site_name"], "hero_title": f.get("hero_title", "").strip()[:140] or DEFAULTS["hero_title"],
+                     "hero_text": f.get("hero_text", "").strip()[:300] or DEFAULTS["hero_text"], "reg_open": yes("reg_open"), "invite": f.get("invite", "").strip()[:60]})
+            return self.go("/admin/site?ok=texts")
+        if p == "/admin/site/colors":
+            if not all(HEX.match(f.get(k, "")) for k in COLOR_KEYS): return self.out(self.apage(u, "/admin/site", "", err="Cor inválida."), 400)
+            set_cfg({k: f[k].lower() for k in COLOR_KEYS}); return self.go("/admin/site?ok=colors")
+        if p == "/admin/site/reset": set_cfg({k: DEFAULTS[k] for k in COLOR_KEYS}); return self.go("/admin/site?ok=reset")
+        if p == "/admin/ads/save":
+            img, link = f.get("ad_img", "").strip(), f.get("ad_link", "").strip()
+            set_cfg({"ad_on": yes("ad_on"), "ad_img": img if img.startswith("https://") else "", "ad_link": link if re.match(r"^https?://", link) else "",
+                     "ad_text": f.get("ad_text", "").strip()[:120], "ad_app": yes("ad_app"), "ad_auth": yes("ad_auth")})
+            return self.go("/admin/ads?ok=ads")
+        if p == "/admin/db/snapshot": make_backup("manual"); return self.go("/admin/db?ok=snap")
+        if p == "/admin/db/sql":
+            q = f.get("q", "").strip()
+            if not q: return self.go("/admin/db")
+            res = sql_run(q, bool(f.get("confirm")))
+            return self.out(self.a_db(u, q=q, res=res))
+        if len(parts) == 4 and parts[1] == "user":
+            t = one("select * from users where id=?", (parts[2],))
+            if not t: return self.go("/admin/users")
+            tid, act = t["id"], parts[3]; me = tid == u["id"]; back = f"/admin/user/{tid}"
+            bad = lambda m: self.out(self.a_user(u, tid, err=m), 400)
+            if act == "save":
+                un, name, em, ph = f.get("username", "").strip(), f.get("name", "").strip()[:60], f.get("email", "").strip(), f.get("phone", "").strip()[:30]
+                if not re.match(r"^[\w.\-]{3,30}$", un) or not name or not re.match(EMAIL_RE, em): return bad("Utilizador (3 a 30 caracteres), nome e email têm de ser válidos.")
+                try: run("update users set username=?, name=?, email=?, phone=? where id=?", (un, name, em, ph, tid))
+                except sqlite3.IntegrityError: return bad("Esse utilizador ou email já existe noutra conta.")
+                return self.go(back + "?ok=user")
+            if act == "admin":
+                if t["is_admin"] and (me or one("select count(*) from users where is_admin=1")[0] <= 1): return bad("Não podes remover o último administrador, nem a ti próprio.")
+                run("update users set is_admin=? where id=?", (0 if t["is_admin"] else 1, tid)); return self.go(back + "?ok=state")
+            if act == "disable":
+                if me: return bad("Não te podes suspender a ti próprio.")
+                run("update users set disabled=? where id=?", (0 if t["disabled"] else 1, tid)); return self.go(back + "?ok=state")
+            if act == "password":
+                if len(f.get("p", "")) < 8: return bad("A palavra-passe tem de ter pelo menos 8 caracteres.")
+                run("update users set pw=? where id=?", (hash_pw(f["p"]), tid)); run("delete from resets where user_id=?", (tid,))
+                return self.go(back + "?ok=pw", [session_cookie(one("select * from users where id=?", (tid,)), self.https())] if me else [])
+            if act == "link":
+                tok = secrets.token_urlsafe(32); run("delete from resets where user_id=? or exp<?", (tid, time.time()))
+                run("insert into resets values(?,?,?)", (hashlib.sha256(tok.encode()).hexdigest(), tid, int(time.time()) + 3600))
+                host = BASE_URL or ("https://" if self.https() else "http://") + str(self.headers.get("Host"))
+                return self.out(self.a_user(u, tid, link=f"{host}/reset?t={tok}"))
+            if act == "ics": run("update users set ics=? where id=?", (secrets.token_hex(20), tid)); return self.go(back + "?ok=ics")
+            if act == "delete":
+                if me: return bad("Não podes apagar a tua própria conta aqui.")
+                if f.get("confirm", "").strip().lower() != t["username"].lower(): return bad("Para apagar, escreve exatamente o nome de utilizador.")
+                make_backup("predelete")
+                run("delete from events where user_id=?", (tid,)); run("delete from clients where user_id=?", (tid,)); run("delete from users where id=?", (tid,))
+                return self.go("/admin/users")
+        self.go("/admin")
+
+    def restore(self):
+        u = self.user()
+        if not (u and u["is_admin"]): return self.out("Não autorizado", 403, "text/plain")
+        n = int(self.headers.get("Content-Length", 0) or 0)
+        if n <= 0 or n > 100_000_000: return self.out("Ficheiro inválido ou demasiado grande (máximo 100 MB).", 400, "text/plain")
+        os.makedirs(BACKUP_DIR, exist_ok=True); tmp = os.path.join(BACKUP_DIR, "upload.tmp")
+        try:
+            left = n
+            with open(tmp, "wb") as fh:
+                while left > 0:
+                    chunk = self.rfile.read(min(65536, left))
+                    if not chunk: break
+                    fh.write(chunk); left -= len(chunk)
+            with open(tmp, "rb") as fh: magic = fh.read(16)
+            if magic != b"SQLite format 3\x00": return self.out("Isto não é um ficheiro de base de dados SQLite.", 400, "text/plain")
+            s = sqlite3.connect(tmp)
+            try:
+                if s.execute("pragma integrity_check").fetchone()[0] != "ok": return self.out("O ficheiro está danificado.", 400, "text/plain")
+                if not {"users", "events", "clients", "kv"} <= {r[0] for r in s.execute("select name from sqlite_master where type='table'")}:
+                    return self.out("Este ficheiro não parece ser uma base de dados da Claquete.", 400, "text/plain")
+                make_backup("prerestore"); d = db()
+                try: s.backup(d)
+                finally: d.close()
+            finally: s.close()
+            init(); self.out("ok", 200, "text/plain")
+        except sqlite3.Error as ex: self.out(f"Erro: {ex}", 400, "text/plain")
+        finally:
+            if os.path.exists(tmp): os.remove(tmp)
 
     # ---- início
     def home(self, u, m):
@@ -486,7 +917,7 @@ class H(BaseHTTPRequestHandler):
         u = one("select * from users where ics=?", (k,)) if k else None
         if not u: return self.out("Não autorizado", 403, "text/plain")
         esc = lambda s: str(s or "").replace("\\", "\\\\").replace(";", "\\;").replace(",", "\\,").replace("\n", "\\n")
-        L = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Claquete//PT", "X-WR-CALNAME:Claquete"]
+        L = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Claquete//PT", f"X-WR-CALNAME:{SN()}"]
         for r in rows(EV + "where e.user_id=? order by e.start_date", (u["id"],)):
             st = "paga" if r["paid"] else "faturada" if r["invoice_date"] else "por faturar"
             L += ["BEGIN:VEVENT", f"UID:ev{r['id']}@claquete", f"DTSTAMP:{dt.datetime.now(dt.timezone.utc):%Y%m%dT%H%M%SZ}", f"DTSTART;VALUE=DATE:{r['start_date'].replace('-', '')}",
@@ -535,14 +966,14 @@ class H(BaseHTTPRequestHandler):
     # ---- definições
     def settings(self, u, ok="", err=""):
         proto = "https" if self.https() else "http"; url = f'{BASE_URL or proto + "://" + str(self.headers.get("Host"))}/calendar.ics?k={u["ics"]}'
-        msg = {"profile": "Dados guardados.", "password": "Palavra-passe alterada."}.get(ok); m = f'<p class="msg ok">{msg}</p>' if msg else (f'<p class="msg err">{err}</p>' if err else "")
+        msg = {"profile": "Dados guardados.", "password": "Palavra-passe alterada.", "ics": "Link novo gerado. O antigo deixou de funcionar."}.get(ok); m = f'<p class="msg ok">{msg}</p>' if msg else (f'<p class="msg err">{err}</p>' if err else "")
         return page("Conta", f'<h1>Conta</h1><p class="sub">Os teus dados e a tua segurança.</p>{m}<form class="f card" method="post" action="/settings/profile"><h2>Dados pessoais</h2>'
             + fld("Nome", "name", val=u["name"], extra="required") + fld("Email", "email", "email", u["email"], "required") + fld("Telemóvel", "phone", "tel", u["phone"] or "")
             + f'<p class="m">Utilizador: <b>{e(u["username"])}</b></p><p><button class="p">Guardar dados</button></p></form>'
             '<form class="f card" method="post" action="/settings/password"><h2>Alterar palavra-passe</h2>' + fld("Palavra-passe atual", "old", "password", extra='autocomplete="current-password" required')
             + fld("Nova palavra-passe (mínimo 8)", "p", "password", extra='autocomplete="new-password" minlength="8" required') + fld("Repetir nova palavra-passe", "p2", "password", extra='autocomplete="new-password" minlength="8" required') + '<p><button class="p">Alterar palavra-passe</button></p></form>'
-            f'<div class="card"><h2>Google Calendar</h2><p class="m">Em Google Calendar → Outras agendas → A partir do URL, cola este link (só leitura). O Google precisa de conseguir aceder ao endereço, por isso só funciona se o site estiver acessível pela internet em HTTPS. Não partilhes este link.</p><input readonly value="{e(url)}" style="width:100%;padding:10px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--ink)" onclick="this.select()"></div>'
-            '<form method="post" action="/logout"><button>Terminar sessão</button></form>', "/settings", u)
+            f'<div class="card"><h2>Google Calendar</h2><p class="m">Em Google Calendar → Outras agendas → A partir do URL, cola este link (só leitura). O Google precisa de conseguir aceder ao endereço, por isso só funciona se o site estiver acessível pela internet em HTTPS. Não partilhes este link.</p><input readonly value="{e(url)}" style="width:100%;padding:10px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--ink)" id="icsurl"><form method="post" action="/settings/ics" style="margin-top:12px"><button>Gerar novo link</button> <span class="m">O link antigo deixa de funcionar.</span></form></div>'
+            '<form method="post" action="/logout"><button>Terminar sessão</button></form><script nonce="__NONCE__">document.getElementById("icsurl").onclick=function(){this.select()}</script>', "/settings", u)
 
     def save_profile(self, u, f):
         name, em, ph = f.get("name", "").strip()[:60], f.get("email", "").strip(), f.get("phone", "").strip()[:30]
@@ -558,5 +989,5 @@ class H(BaseHTTPRequestHandler):
         self.go("/settings?ok=password", [session_cookie(nu, self.https())])
 
 if __name__ == "__main__":
-    init(); print("Claquete a escutar na porta 8000 | email:", "ativo" if smtp_ready() else "desligado", "| BASE_URL:", BASE_URL or "(vazio)", flush=True)
+    init(); threading.Thread(target=backup_loop, daemon=True).start(); print("Claquete a escutar na porta 8000 | email:", "ativo" if smtp_ready() else "desligado", "| BASE_URL:", BASE_URL or "(vazio)", flush=True)
     ThreadingHTTPServer(("0.0.0.0", 8000), H).serve_forever()

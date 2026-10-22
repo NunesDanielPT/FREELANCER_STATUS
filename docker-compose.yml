@@ -11,6 +11,8 @@ services:
       BASE_URL: ${BASE_URL:-}
       # Opcional: se definido, só regista quem souber o código.
       INVITE_CODE: ${INVITE_CODE:-}
+      # Opcional: este utilizador passa a administrador (o primeiro registo já é admin).
+      ADMIN_USER: ${ADMIN_USER:-}
       # Email (Gmail só para envio). Define estas duas no Portainer, nunca aqui no GitHub.
       SMTP_USER: ${SMTP_USER:-}
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
