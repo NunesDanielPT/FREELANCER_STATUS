@@ -589,7 +589,7 @@ class H(BaseHTTPRequestHandler):
     # ---- admin
     TABS = [("/admin", "Resumo"), ("/admin/users", "Utilizadores"), ("/admin/site", "Site"), ("/admin/ads", "Publicidade"), ("/admin/db", "Base de dados")]
     FLASH = {"texts": "Textos e registo guardados.", "colors": "Cores guardadas.", "reset": "Cores repostas.", "ads": "Publicidade guardada.", "user": "Dados guardados.",
-             "pw": "Palavra-passe definida. A pessoa tem de entrar de novo.", "ics": "Link do calendário renovado.", "state": "Estado atualizado.", "snap": "Backup criado."}
+             "pw": "Palavra-passe definida. A pessoa tem de entrar de novo.", "ics": "Link do calendário renovado.", "state": "Estado atualizado.", "snap": "Backup criado.", "newadmin": "Administrador adicionado."}
 
     def apage(self, u, tab, body, ok="", err=""):
         chips = "".join(f'<a class="{"on" if h == tab else ""}" href="{h}">{n}</a>' for h, n in self.TABS)
@@ -604,7 +604,7 @@ class H(BaseHTTPRequestHandler):
     def admin_get(self, u, p, parts, g):
         if not u["is_admin"]: raise ValueError
         if p == "/admin": return self.out(self.a_home(u))
-        if p == "/admin/users": return self.out(self.a_users(u))
+        if p == "/admin/users": return self.out(self.a_users(u, g("ok")))
         if p == "/admin/site": return self.out(self.a_site(u, g("ok")))
         if p == "/admin/ads": return self.out(self.a_ads(u, g("ok")))
         if p == "/admin/db": return self.out(self.a_db(u, g("ok"), g("t")))
@@ -630,13 +630,19 @@ class H(BaseHTTPRequestHandler):
                       f'<small>{e(x["email"])} · registo {e(x["created"])}</small></div></a><span class="m">{e(x["last_seen"] or "nunca entrou")}</span></div>' for x in rows("select * from users order by id desc limit 6"))
         return self.apage(u, "/admin", f'{strip}<h2>Avisos</h2><div class="card">{wh}</div><h2>Últimas contas</h2><div class="list">{rec}</div><p><a class="btn" href="/admin/users">Ver todas as contas</a></p>')
 
-    def a_users(self, u):
+    def a_users(self, u, ok=""):
         us = rows("select u.*, (select count(*) from events where user_id=u.id) ne, (select count(*) from clients where user_id=u.id) nc from users u order by id")
         bd = lambda x: ('<span class="bd a">Admin</span> ' if x["is_admin"] else "") + ('<span class="bd s">Suspensa</span>' if x["disabled"] else "")
         tr = "".join(f'<tr><td><a href="/admin/user/{x["id"]}"><b>{e(x["name"] or x["username"])}</b></a><br><span class="m">@{e(x["username"])}</span></td><td class="l">{e(x["email"])}</td>'
                      f'<td>{e(x["created"])}</td><td>{e(x["last_seen"] or "nunca")}</td><td>{x["ne"]}</td><td>{x["nc"]}</td><td>{bd(x)}</td></tr>' for x in us)
-        return self.apage(u, "/admin/users", f'<p class="m">{len(us)} contas. Clica num nome para editar, mudar o email, repor a palavra-passe ou suspender.</p>'
-                          f'<div class="card sc"><table class="tb"><tr><th>Conta</th><th class="l">Email</th><th>Registo</th><th>Último acesso</th><th>Eventos</th><th>Clientes</th><th></th></tr>{tr}</table></div>')
+        cand = "".join(f'<option value="{x["id"]}">{e(x["name"] or x["username"])} (@{e(x["username"])}) · {e(x["email"])}</option>' for x in us if not x["is_admin"] and not x["disabled"])
+        adm = ", ".join(f'<a href="/admin/user/{x["id"]}"><b>{e(x["name"] or x["username"])}</b></a>' for x in us if x["is_admin"])
+        addf = ('<form class="f card" method="post" action="/admin/users/promote"><h2>Administradores</h2><p class="m">Atuais: ' + adm + '. Os administradores veem e gerem todas as contas e dados. '
+                'Para adicionar alguém, essa pessoa tem de ter criado conta primeiro.</p>'
+                + (f'<label>Adicionar administrador</label><div class="row2"><select name="uid" style="flex:1;min-width:220px;width:auto" required>{cand}</select><button class="p">Tornar admin</button></div>' if cand
+                   else '<p class="m">Não há mais contas para promover.</p>') + '</form>')
+        return self.apage(u, "/admin/users", addf + f'<p class="m">{len(us)} contas. Clica num nome para editar, mudar o email, repor a palavra-passe ou suspender.</p>'
+                          f'<div class="card sc"><table class="tb"><tr><th>Conta</th><th class="l">Email</th><th>Registo</th><th>Último acesso</th><th>Eventos</th><th>Clientes</th><th></th></tr>{tr}</table></div>', ok)
 
     def a_user(self, u, tid, ok="", err="", link=""):
         t = one("select * from users where id=?", (tid,))
@@ -734,6 +740,10 @@ class H(BaseHTTPRequestHandler):
             set_cfg({"ad_on": yes("ad_on"), "ad_img": img if img.startswith("https://") else "", "ad_link": link if re.match(r"^https?://", link) else "",
                      "ad_text": f.get("ad_text", "").strip()[:120], "ad_app": yes("ad_app"), "ad_auth": yes("ad_auth")})
             return self.go("/admin/ads?ok=ads")
+        if p == "/admin/users/promote":
+            t = one("select * from users where id=? and disabled=0", (f.get("uid") or 0,))
+            if t: run("update users set is_admin=1 where id=?", (t["id"],)); return self.go("/admin/users?ok=newadmin")
+            return self.go("/admin/users")
         if p == "/admin/db/snapshot": make_backup("manual"); return self.go("/admin/db?ok=snap")
         if p == "/admin/db/sql":
             q = f.get("q", "").strip()
