@@ -551,6 +551,14 @@ P += [
 from guide import ROWS as _GUIDE
 P += _GUIDE
 P += [("Como funciona", "How it works", "Cómo funciona", "Comment ça marche", "Come funziona")]
+P += [
+    ("Novo por aqui? Vê em 2 minutos como funciona.", "New here? See how it works in 2 minutes.", "¿Nuevo por aquí? Mira en 2 minutos cómo funciona.", "Nouveau ici ? Découvrez en 2 minutes comment ça marche.", "Nuovo qui? Scopri in 2 minuti come funziona."),
+    ("Novo aqui?", "New here?", "¿Nuevo aquí?", "Nouveau ici ?", "Nuovo qui?"),
+    ("Vê como funciona", "See how it works", "Mira cómo funciona", "Voir comment ça marche", "Scopri come funziona"),
+    ("Vê como começar", "See how to get started", "Mira cómo empezar", "Voir comment commencer", "Scopri come iniziare"),
+    ("Vê como agendar o primeiro", "See how to schedule your first one", "Mira cómo programar el primero", "Voir comment planifier le premier", "Scopri come pianificare il primo"),
+    ("Fechar", "Close", "Cerrar", "Fermer", "Chiudi"),
+]
 # --- e-mails (pt, en, es, fr, it) com {marcadores}
 MAIL = {
     "welcome_s": ("Bem-vindo à {site}", "Welcome to {site}", "Bienvenido a {site}", "Bienvenue sur {site}", "Benvenuto su {site}"),

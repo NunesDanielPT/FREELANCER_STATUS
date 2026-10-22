@@ -118,7 +118,7 @@ def migrate(c):
     cols = {r[1] for r in c.execute("pragma table_info(users)")}
     mc = {r[1] for r in c.execute("pragma table_info(chat_msgs)")}
     if mc and "img" not in mc: c.execute("alter table chat_msgs add column img integer default 0")
-    for name, ddl in (("is_admin", "integer default 0"), ("disabled", "integer default 0"), ("last_seen", "text"), ("av_v", "integer default 0")):
+    for name, ddl in (("is_admin", "integer default 0"), ("disabled", "integer default 0"), ("last_seen", "text"), ("av_v", "integer default 0"), ("guide_seen", "integer default 0")):
         if name not in cols: c.execute(f"alter table users add column {name} {ddl}")
     if not c.execute("select 1 from users where is_admin=1").fetchone():
         c.execute("update users set is_admin=1 where id=(select min(id) from users)")
@@ -431,6 +431,7 @@ code,textarea.mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.
 .me{overflow:hidden;position:relative}.me img{width:100%;height:100%;object-fit:cover;display:block}.bell{position:relative;display:inline-flex}.bell svg{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 .bell .nb{position:absolute;top:-6px;right:-8px;margin:0}.avset{display:flex;gap:16px;align-items:center;flex-wrap:wrap}.avset .av{width:72px;height:72px;font-size:1.5rem}
 @media(max-width:820px){.main.chat{padding:0}.cw{grid-template-columns:1fr;height:calc(100dvh - 56px - 68px);border-radius:0;border-left:0;border-right:0}.cw.open .cl{display:none}.cw:not(.open) .crm{display:none}.rh .back,.gnew .back{display:block}}
+.tip{display:flex;align-items:center;gap:6px;background:color-mix(in srgb,var(--brand) 11%,var(--sf));border:1px solid color-mix(in srgb,var(--brand) 30%,var(--line));border-radius:12px;padding:8px 8px 8px 14px;margin-bottom:14px}.tip a{flex:1;text-decoration:none;color:var(--ink);font-weight:600;font-size:.92rem}.tip form{margin:0}.tip .ib{color:var(--mut)}
 .gc{display:flex;gap:14px;align-items:center;text-decoration:none;color:inherit;margin-bottom:10px}.gc:hover{border-color:var(--brand)}.gn{width:30px;height:30px;border-radius:50%;background:var(--brand);color:#fff;display:grid;place-items:center;font-weight:700;font-size:.85rem;flex:none}.gi2{font-size:1.5rem}.gt p,.gt li{font-size:1.02rem;line-height:1.55}.gt li{margin:8px 0}
 .nb[hidden]{display:none}.av.s{width:18px;height:18px;font-size:.6rem;border-radius:50%;vertical-align:middle;margin-right:5px;display:inline-grid;place-items:center;object-fit:cover}
 .mi{display:block;max-width:100%;max-height:300px;border-radius:10px;margin:2px 0 4px;cursor:zoom-in}.mx{color:var(--mut);font-style:italic}
@@ -719,6 +720,7 @@ class H(BaseHTTPRequestHandler):
             return self.out({"/login": lambda: self.login_page(ok=g("ok")), "/register": self.register_page, "/forgot": self.forgot_page, "/reset": lambda: self.reset_page(g("t"))}[p]())
         if p == "/ws": return self.websocket(u)
         if p == "/guide" or p.startswith("/guide/"):
+            if u and p == "/guide" and not u["guide_seen"]: run("update users set guide_seen=1 where id=?", (u["id"],))
             try: return self.out(self.guide_page(u, p))
             except (ValueError, IndexError): return self.out(shell("Não encontrado", "<h1>Página não encontrada</h1>", u), 404)
         if p == "/about" or p.startswith("/support"):
@@ -787,6 +789,8 @@ class H(BaseHTTPRequestHandler):
             return self.go("/clients")
         if parts[0] == "client" and len(parts) == 3 and parts[2] == "delete":
             run("delete from clients where id=? and user_id=?", (parts[1], i)); return self.go("/clients")
+        if p == "/guide/dismiss":
+            run("update users set guide_seen=1 where id=?", (i,)); return self.go("/")
         if p == "/settings/avatar": return self.save_avatar(u, f)
         if p == "/settings/avatar/remove":
             run("delete from avatars where user_id=?", (i,)); run("update users set av_v=0 where id=?", (i,)); return self.go("/settings?ok=avatar_rm")
@@ -800,7 +804,7 @@ class H(BaseHTTPRequestHandler):
         msg = f'<p class="msg err">{err}</p>' if err else '<p class="msg ok">Palavra-passe alterada. Já podes entrar.</p>' if ok == "reset" else ""
         return auth_page("Entrar", f'<h1>Entrar</h1><p class="sub">Bem-vindo de volta.</p>{msg}<form class="f" method="post" action="/login">'
             + fld("Utilizador ou email", "u", extra='autocomplete="username" required autofocus') + fld("Palavra-passe", "p", "password", extra='autocomplete="current-password" required')
-            + '<p><button class="p" style="width:100%">Entrar</button></p></form><p class="l2"><a href="/forgot">Esqueci-me da palavra-passe</a></p><p class="l2 m">Ainda não tens conta? <a href="/register">Criar conta</a></p>' + SUPBTN)
+            + '<p><button class="p" style="width:100%">Entrar</button></p></form><p class="l2"><a href="/forgot">Esqueci-me da palavra-passe</a></p><p class="l2 m">Ainda não tens conta? <a href="/register">Criar conta</a></p><p class="l2 m">Novo aqui? <a href="/guide">Vê como funciona</a></p>' + SUPBTN)
 
     def do_login(self, f):
         ip = self.client_address[0]; n, t = self.fails.get(ip, (0, 0))
@@ -818,7 +822,7 @@ class H(BaseHTTPRequestHandler):
         return auth_page("Criar conta", '<h1>Criar conta</h1><p class="sub">Demora menos de um minuto.</p>' + (f'<p class="msg err">{err}</p>' if err else "") + '<form class="f" method="post" action="/register">'
             + fld("Utilizador", "u", val=v.get("u", ""), extra='autocomplete="username" required autofocus') + fld("Email (para recuperar a palavra-passe)", "email", "email", v.get("email", ""), 'autocomplete="email" required')
             + fld("Palavra-passe (mínimo 8 caracteres)", "p", "password", extra='autocomplete="new-password" minlength="8" required') + fld("Repetir palavra-passe", "p2", "password", extra='autocomplete="new-password" minlength="8" required')
-            + inv + '<p><button class="p" style="width:100%">Criar conta e entrar</button></p></form><p class="l2 m">Já tens conta? <a href="/login">Entrar</a></p>' + SUPBTN)
+            + inv + '<p><button class="p" style="width:100%">Criar conta e entrar</button></p></form><p class="l2 m">Já tens conta? <a href="/login">Entrar</a></p><p class="l2 m">Novo aqui? <a href="/guide">Vê como funciona</a></p>' + SUPBTN)
 
     def do_register(self, f):
         v = {"u": f.get("u", "").strip(), "email": f.get("email", "").strip()}; err = ""
@@ -1169,7 +1173,10 @@ class H(BaseHTTPRequestHandler):
         rm = one("select coalesce(sum(amount),0) s from events where user_id=? and paid=1 and substr(invoice_date,1,7)=?", (i,ym))["s"]
         s = lambda l: sum(x["amount"] or 0 for x in l)
         tile = lambda c, lab, val, sub: f'<div class="st" style="--c:{c}"><span>{lab}</span><b>{eur(val)}</b><span>{sub}</span></div>'
-        return page("Início", f'<div class="bar-h"><div><h1>Olá, {e(u["name"] or u["username"])}</h1><p class="sub" style="margin:0">O ponto da situação.</p></div><a class="btn p" href="/event/new">Novo evento</a></div>'
+        tip = ""
+        if not u["guide_seen"] and not one("select 1 from events where user_id=?", (i,)):
+            tip = '<div class="tip"><a href="/guide">👋 Novo por aqui? Vê em 2 minutos como funciona. <b>›</b></a><form method="post" action="/guide/dismiss"><button class="ib" aria-label="Fechar" title="Fechar">✕</button></form></div>'
+        return page("Início", tip + f'<div class="bar-h"><div><h1>Olá, {e(u["name"] or u["username"])}</h1><p class="sub" style="margin:0">O ponto da situação.</p></div><a class="btn p" href="/event/new">Novo evento</a></div>'
             f'<div class="mn"><a class="btn" href="/?m={prev}">‹</a><b>{mn} {first.year}</b><a class="btn" href="/?m={nxt}">›</a><span class="m">aplica-se a Faturado e Recebido</span></div>'
             '<div class="strip">' + tile("var(--todo)", "Por faturar", s(a), pl(len(a), "evento")) + tile("var(--inv)", "Faturado, por receber", s(b), pl(len(b), "evento"))
             + tile("var(--brand)", f"Faturado em {mn}", fm, "pela data da fatura") + tile("var(--paid)", f"Recebido de {mn}", rm, "já pago") + '</div>'
@@ -1180,7 +1187,7 @@ class H(BaseHTTPRequestHandler):
         w = {"faturar": "and e.invoice_date is null", "receber": "and e.invoice_date is not null and e.paid=0", "pagos": "and e.paid=1"}.get(f, "")
         r = rows(EV + f"where e.user_id=? {w} order by e.start_date desc", (u["id"],))
         chips = "".join(f'<a class="{"on" if f == k else ""}" href="/events?f={k}">{n}</a>' for k, n in [("todos", "Todos"), ("faturar", "Por faturar"), ("receber", "Por receber"), ("pagos", "Pagos")])
-        return page("Eventos", f'<div class="bar-h"><h1>Eventos</h1><a class="btn p" href="/event/new">Novo evento</a></div><div class="chips">{chips}</div>' + lst(r, f"/events?f={f}", "Sem eventos."), "/events", u)
+        return page("Eventos", f'<div class="bar-h"><h1>Eventos</h1><a class="btn p" href="/event/new">Novo evento</a></div><div class="chips">{chips}</div>' + lst(r, f"/events?f={f}", "Sem eventos." + ('<br><a href="/guide/2">Vê como agendar o primeiro</a>' if not one("select 1 from events where user_id=?", (u["id"],)) else "")), "/events", u)
 
     def event_form(self, u, i, date=""):
         v = None
@@ -1229,7 +1236,7 @@ class H(BaseHTTPRequestHandler):
     def clients(self, u):
         r = rows("select c.*, (select count(*) from events where client_id=c.id) n, (select coalesce(sum(amount),0) from events where client_id=c.id and paid=0 and invoice_date is not null) due from clients c where user_id=? order by name", (u["id"],))
         l = "".join(f'<div class="er"><a class="eh" href="/client/{c["id"]}">{avatar(c["name"], c["logo"])}<div><b>{e(c["name"])}</b><small>{e(c["rate"]) if c["rate"] else "sem valores definidos"} · {pl(c["n"], "evento")}</small></div></a><span class="amt">{eur(c["due"]) if c["due"] else ""}</span></div>' for c in r)
-        return page("Clientes", f'<div class="bar-h"><h1>Clientes</h1><a class="btn p" href="/client/new">Novo cliente</a></div><div class="list">{l or "<div class=empty>Ainda sem clientes.</div>"}</div>', "/clients", u)
+        return page("Clientes", f'<div class="bar-h"><h1>Clientes</h1><a class="btn p" href="/client/new">Novo cliente</a></div><div class="list">{l or "<div class=empty>Ainda sem clientes. <a href=/guide/1>Vê como começar</a></div>"}</div>', "/clients", u)
 
     def client_form(self, u, i):
         v = None
