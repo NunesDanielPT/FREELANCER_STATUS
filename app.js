@@ -28,7 +28,7 @@
       document.title = (j.chat + j.notif ? "(" + (j.chat + j.notif) + ") " : "") + base;
     }).catch(function () {});
   }
-  setInterval(function () { if (!up) state(); }, 20000);
+  setInterval(function () { if (!up) { state(); panels(); } }, 15000);
 
   /* ---------- avisos */
   function toast(t, href) {
@@ -70,6 +70,8 @@
       var w = document.createElement("div"); w.innerHTML = t;
       $$("[data-p]", w).forEach(function (p) { var d = $("#p-" + p.dataset.p); if (d) d.innerHTML = p.innerHTML; });
       var a = $("[data-bc]", w); if (a) { $$("#tb [data-t=c] .nb").forEach(function (b) { b.textContent = a.dataset.bc; b.hidden = !+a.dataset.bc; }); $$("#tb [data-t=f] .nb").forEach(function (b) { b.textContent = a.dataset.bf; b.hidden = !+a.dataset.bf; }); }
+      $$("[data-ps]", w).forEach(function (p) { $$('[data-ps="' + p.dataset.ps + '"]').forEach(function (x) { if (x.className.indexOf("ty") < 0 && x.textContent !== p.textContent) { x.textContent = p.textContent; x.dataset.base = p.textContent; } }); });
+      $$("[data-pres]", w).forEach(function (p) { $$('[data-pres="' + p.dataset.pres + '"]').forEach(function (x) { x.hidden = p.hidden; }); });
       filter();
     }).catch(function () {});
   }
@@ -102,7 +104,14 @@
       var f = document.createDocumentFragment(), day = x.t.slice(0, 10);
       if (day !== lastDay && !x.before) { var s = document.createElement("div"); s.className = "ds"; s.textContent = dayLabel(day); f.appendChild(s); lastDay = day; }
       var d = document.createElement("div"); d.className = "mg" + (x.me ? " a" : ""); d.dataset.id = x.id; d.dataset.day = day;
-      if (!x.me && !DM) { var w = document.createElement("small"); w.className = "who"; w.textContent = x.n; d.appendChild(w); }
+      if (!x.me && !DM) {
+        var w = document.createElement("small"); w.className = "who";
+        if (x.a) { var im0 = document.createElement("img"); im0.className = "av u s"; im0.src = "/avatar/" + x.u + "?v=" + x.a; im0.alt = ""; w.appendChild(im0); }
+        else { var sp = document.createElement("span"); sp.className = "av u s"; sp.textContent = (x.n || "?").split(/\s+/).slice(0, 2).map(function (z) { return z[0] || ""; }).join("").toUpperCase(); w.appendChild(sp); }
+        w.appendChild(document.createTextNode(x.n)); d.appendChild(w);
+      }
+      if (x.img) { var ln = document.createElement("a"); ln.href = "/chat/img/" + x.img; ln.target = "_blank"; ln.rel = "noopener"; var pi = document.createElement("img"); pi.className = "mi"; pi.loading = "lazy"; pi.alt = ""; pi.src = "/chat/img/" + x.img; ln.appendChild(pi); d.appendChild(ln); }
+      else if (x.gone) { var gx = document.createElement("span"); gx.className = "mx"; gx.textContent = "\u{1F4F7} " + L.gone + " "; d.appendChild(gx); }
       d.appendChild(document.createTextNode(x.b));
       var t = document.createElement("span"); t.className = "tm"; t.textContent = x.t.slice(11, 16); d.appendChild(t);
       if (x.me && DM) { var k = document.createElement("i"); k.className = "tk"; k.textContent = "✓"; t.appendChild(k); }
@@ -118,7 +127,8 @@
     setInterval(function () { if (!up) poll(); }, 4000);
     on("msg", function (d) {
       if (d.c === CID) {
-        add({ id: d.id, me: d.u === UID, n: d.n, b: d.b, t: d.t });
+        if (d.u !== UID && rs) { clearTimeout(typT); rs.classList.remove("ty"); rs.textContent = rs.dataset.base || rs.textContent; }
+        add({ id: d.id, me: d.u === UID, n: d.n, b: d.b, t: d.t, u: d.u, a: d.a, img: d.img });
         if (d.u !== UID) { if (document.visibilityState === "visible") markRead(); else native(d.n, d.b); }
       } else if (d.u !== UID) { native(d.n, d.b); }
       panels(); state();
@@ -137,8 +147,28 @@
     document.addEventListener("visibilitychange", function () { if (document.visibilityState === "visible") { markRead(); poll(); } });
     if (F) {
       F.onsubmit = function (ev) {
-        ev.preventDefault(); var b = IN.value.trim(); if (!b) return; IN.value = "";
+        ev.preventDefault(); var b = IN.value.trim(); if (!b) return; IN.value = ""; $("#ep").hidden = true;
         post(F.action, "ajax=1&body=" + encodeURIComponent(b)).then(function () { if (!up) { busy = 0; poll(); } });
+      };
+      var EM = "😀 😁 😂 🤣 😊 😍 😘 😎 🤔 😅 😉 🙂 🙃 😭 😢 😡 😴 🤗 🙄 😬 🥳 🤩 😇 🤝 👍 👎 👏 🙌 🙏 💪 👋 ✌️ 👌 🤞 ❤️ 💔 💙 💚 🔥 ✨ 🎉 🎬 🎥 📷 🎞️ 🎧 🎤 💡 ✅ ❌ ⚠️ ⭐ 💯 💰 📅 ⏰ ☕ 🍻 🍕 🚀 🌞 🌧️ 🇵🇹".split(" "), ep = $("#ep");
+      EM.forEach(function (m) { var b = document.createElement("button"); b.type = "button"; b.textContent = m; b.onclick = function () { var p = IN.selectionStart == null ? IN.value.length : IN.selectionStart; IN.value = IN.value.slice(0, p) + m + IN.value.slice(IN.selectionEnd == null ? p : IN.selectionEnd); IN.focus(); var q = p + m.length; IN.setSelectionRange(q, q); }; ep.appendChild(b); });
+      $("#eb").onclick = function (e) { e.stopPropagation(); ep.hidden = !ep.hidden; };
+      document.addEventListener("click", function (e) { if (!ep.contains(e.target)) ep.hidden = true; });
+      var fi = $("#if"); $("#ib").onclick = function () { fi.click(); };
+      fi.onchange = function () {
+        var f = fi.files[0]; fi.value = ""; if (!f) return;
+        var r = new FileReader();
+        r.onload = function () {
+          var im = new Image();
+          im.onload = function () {
+            var k = Math.min(1, 1280 / Math.max(im.width, im.height)), c = document.createElement("canvas"); c.width = Math.round(im.width * k); c.height = Math.round(im.height * k);
+            var x = c.getContext("2d"); x.fillStyle = "#fff"; x.fillRect(0, 0, c.width, c.height); x.drawImage(im, 0, 0, c.width, c.height);
+            var q = .82, d = c.toDataURL("image/jpeg", q); while (d.length > 380000 && q > .3) { q -= .1; d = c.toDataURL("image/jpeg", q); }
+            post(F.action, "ajax=1&img=" + encodeURIComponent(d) + "&body=" + encodeURIComponent(IN.value.trim())).then(function () { IN.value = ""; if (!up) { busy = 0; poll(); } });
+          };
+          im.src = r.result;
+        };
+        r.readAsDataURL(f);
       };
       var lt = 0;
       IN.oninput = function () { var n = Date.now(); if (n - lt > 2000) { lt = n; CLQ.send({ t: "typing", c: CID }); } };

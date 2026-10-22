@@ -533,6 +533,12 @@ P += [
     ("Foto removida.", "Photo removed.", "Foto eliminada.", "Photo supprimée.", "Foto rimossa."),
     ("Imagem inválida. Usa JPG, PNG ou WebP.", "Invalid image. Use JPG, PNG or WebP.", "Imagen no válida. Usa JPG, PNG o WebP.", "Image invalide. Utilisez JPG, PNG ou WebP.", "Immagine non valida. Usa JPG, PNG o WebP."),
 ]
+P += [
+    ("Foto", "Photo", "Foto", "Photo", "Foto"),
+    ("Imagem expirada", "Image expired", "Imagen caducada", "Image expirée", "Immagine scaduta"),
+    ("Emojis", "Emojis", "Emojis", "Émojis", "Emoji"),
+    ("Enviar imagem (apagada ao fim de 5 dias)", "Send image (deleted after 5 days)", "Enviar imagen (se borra a los 5 días)", "Envoyer une image (supprimée après 5 jours)", "Invia immagine (eliminata dopo 5 giorni)"),
+]
 # --- e-mails (pt, en, es, fr, it) com {marcadores}
 MAIL = {
     "welcome_s": ("Bem-vindo à {site}", "Welcome to {site}", "Bienvenido a {site}", "Bienvenue sur {site}", "Benvenuto su {site}"),

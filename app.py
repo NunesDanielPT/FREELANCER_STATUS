@@ -106,6 +106,8 @@ def reg_allowed(c): return c["reg_open"] == "1" or not one("select 1 from users"
 
 def migrate(c):
     cols = {r[1] for r in c.execute("pragma table_info(users)")}
+    mc = {r[1] for r in c.execute("pragma table_info(chat_msgs)")}
+    if mc and "img" not in mc: c.execute("alter table chat_msgs add column img integer default 0")
     for name, ddl in (("is_admin", "integer default 0"), ("disabled", "integer default 0"), ("last_seen", "text"), ("av_v", "integer default 0")):
         if name not in cols: c.execute(f"alter table users add column {name} {ddl}")
     if not c.execute("select 1 from users where is_admin=1").fetchone():
@@ -260,6 +262,7 @@ def init():
     create table if not exists chats(id integer primary key, kind text, name text, owner integer, created text);
     create table if not exists chat_members(chat_id integer references chats(id) on delete cascade, user_id integer, last_read integer default 0, primary key(chat_id, user_id));
     create table if not exists chat_msgs(id integer primary key, chat_id integer references chats(id) on delete cascade, user_id integer, body text, created text);
+    create table if not exists chat_imgs(id integer primary key, chat_id integer, mime text, data text, created text);
     create table if not exists avatars(user_id integer primary key, mime text, data text);
     create table if not exists notifs(id integer primary key, title text, body text, tr text, created text, author integer);
     create table if not exists notif_seen(user_id integer, notif_id integer, primary key(user_id, notif_id));
@@ -398,7 +401,7 @@ code,textarea.mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.
 .ct{flex:1;min-width:0}.ct b{display:block;font-weight:620;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.ct small{display:block;color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:.82rem}
 .cm{display:flex;flex-direction:column;align-items:flex-end;gap:4px;font-size:.72rem;color:var(--mut)}.cm .nb{margin:0}
 .avw{position:relative;flex:none;display:inline-block}.av.u{border-radius:50%;object-fit:cover}.av.g{background:color-mix(in srgb,var(--brand) 18%,var(--bg));color:var(--brand)}
-.dot{position:absolute;right:-1px;bottom:-1px;width:12px;height:12px;border-radius:50%;background:var(--paid);border:2px solid var(--sf)}.dot[hidden]{display:none}
+.dot{position:absolute;inset:-3px;border-radius:50%;border:3px solid var(--paid);pointer-events:none}.dot[hidden]{display:none}
 .sh{padding:12px 14px 4px;font-size:.72rem;text-transform:uppercase;letter-spacing:.05em;color:var(--mut);font-weight:700}.pn .empty{padding:18px 14px;color:var(--mut);font-size:.9rem}
 .ca{display:flex;gap:6px;padding:10px 12px;margin:0}.ca input{flex:1;min-width:0}.rq{display:flex;align-items:center;gap:8px;padding:6px 14px}.rq form{margin:0}.rq button{padding:4px 10px;font-size:.82rem}
 .crm{display:flex;flex-direction:column;min-width:0;min-height:0}.rh{display:flex;gap:12px;align-items:center;padding:10px 14px;border-bottom:1px solid var(--line);position:relative}
@@ -418,6 +421,11 @@ code,textarea.mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.
 .me{overflow:hidden;position:relative}.me img{width:100%;height:100%;object-fit:cover;display:block}.bell{position:relative;display:inline-flex}.bell svg{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 .bell .nb{position:absolute;top:-6px;right:-8px;margin:0}.avset{display:flex;gap:16px;align-items:center;flex-wrap:wrap}.avset .av{width:72px;height:72px;font-size:1.5rem}
 @media(max-width:820px){.main.chat{padding:0}.cw{grid-template-columns:1fr;height:calc(100dvh - 56px - 68px);border-radius:0;border-left:0;border-right:0}.cw.open .cl{display:none}.cw:not(.open) .crm{display:none}.rh .back,.gnew .back{display:block}}
+.nb[hidden]{display:none}.av.s{width:18px;height:18px;font-size:.6rem;border-radius:50%;vertical-align:middle;margin-right:5px;display:inline-grid;place-items:center;object-fit:cover}
+.mi{display:block;max-width:100%;max-height:300px;border-radius:10px;margin:2px 0 4px;cursor:zoom-in}.mx{color:var(--mut);font-style:italic}
+.rc .ib{font-size:1.35rem;padding:4px 8px;background:none;border:0;color:var(--mut)}.rc{position:relative;align-items:center}
+.ep{position:absolute;bottom:100%;left:8px;z-index:30;width:min(340px,94vw);max-height:230px;overflow:auto;background:var(--sf);border:1px solid var(--line);border-radius:12px;padding:8px;box-shadow:0 10px 36px #0003;display:grid;grid-template-columns:repeat(8,1fr);gap:2px}
+.ep[hidden]{display:none}.ep button{border:0;background:none;font-size:1.35rem;padding:3px;border-radius:8px;cursor:pointer}.ep button:hover{background:var(--bg)}
 .nb[hidden]{display:none}.nl{position:relative}.nb{background:var(--todo);color:#fff;border-radius:99px;font-size:.68rem;font-weight:700;padding:0 6px;min-width:18px;text-align:center;line-height:18px;font-style:normal;margin-left:auto}
 @media(max-width:820px){.nl .nb{position:absolute;top:1px;left:calc(50% + 6px);margin:0}}
 .chatbox{height:min(58vh,520px);overflow:auto;margin:14px 0;padding:4px 2px}.chatbox .msgs{margin:0}.row2 input[type=text],.row2 input:not([type]){flex:1;min-width:180px}
@@ -468,7 +476,7 @@ def page(title, body, active, u):
            f'<a class="me" href="/settings" aria-label="Conta">{f'<img src="/avatar/{u["id"]}?v={u["av_v"]}" alt="">' if u["av_v"] else e(ini(u["name"] or u["username"]))}</a></div></div>')
     return (head(eh(title) + " · " + sn, c) + f'<div class="shell"><nav class="side"><a class="brand" href="/">{lg}{sn}</a>{nav}<div class="sp"></div>{adm}{acct}</nav>'
             f'<div>{top}<main class="main{" chat" if active == "/chat" else ""}">{"" if active == "/chat" else ad_html(c, "app")}{body}{"" if active == "/chat" else foot(nu)}</main></div>'
-            f'<div id="i18n" hidden data-online="{eh(tx("online"))}" data-seen="{eh(tx("visto por último"))}" data-typing="{eh(tx("a escrever..."))}" data-today="{eh(tx("Hoje"))}" data-yest="{eh(tx("Ontem"))}"></div>'
+            f'<div id="i18n" hidden data-online="{eh(tx("online"))}" data-seen="{eh(tx("visto por último"))}" data-typing="{eh(tx("a escrever..."))}" data-today="{eh(tx("Hoje"))}" data-yest="{eh(tx("Ontem"))}" data-gone="{eh(tx("Imagem expirada"))}"></div>'
             f'<script src="/app.js?v={JSV}" data-uid="{u["id"]}" defer></script></body></html>')
 
 TL = ('<div class="tl"><div><i class="paid" style="left:2%;width:30%">Casamento</i><i class="inv" style="left:38%;width:24%">Conferência</i></div>'
@@ -500,7 +508,7 @@ def day_label(d):
     return f"{d[8:10]}/{d[5:7]}/{d[:4]}"
 
 def pres_text(r):
-    if ws.hub.online(r["id"]): return eh("online")
+    if is_online(r["id"]): return eh("online")
     ls = r["last_seen"]
     if not ls: return ""
     d = ls[:10]
@@ -518,6 +526,19 @@ def notif_text(n):
     except ValueError: v = {}
     return v.get("t") or n["title"], v.get("b") or n["body"]
 
+PULSE = {}
+def is_online(uid): return ws.hub.online(uid) or time.time() - PULSE.get(uid, 0) < 45
+
+def purge_imgs():
+    lim = (dt.datetime.now() - dt.timedelta(days=5)).strftime("%Y-%m-%d %H:%M")
+    run("delete from chat_imgs where created < ?", (lim,))
+
+def img_loop():
+    while True:
+        try: purge_imgs()
+        except Exception: pass
+        time.sleep(3600)
+
 def push_sync(*uids): ws.hub.push([x for x in uids if x], {"e": "sync"})
 def member_ids(cid): return [r["user_id"] for r in rows("select user_id from chat_members where chat_id=?", (cid,))]
 
@@ -527,9 +548,11 @@ def presence(uid, on):
 
 def msg_html(x, me, dm, plr):
     mine = x["user_id"] == me
-    who = "" if mine or dm else f'<small class="who">{e(uname(x))}</small>'
+    who = "" if mine or dm else f'<small class="who">{uav(dict(id=x["user_id"], av_v=x["av_v"], name=x["name"], username=x["username"]), " s")}{e(uname(x))}</small>'
     tk = (f'<i class="tk{" rd" if x["id"] <= plr else ""}">{"✓✓" if x["id"] <= plr else "✓"}</i>') if mine and dm else ""
-    return f'<div class="mg{" a" if mine else ""}" data-id="{x["id"]}" data-day="{x["created"][:10]}">{who}{e(x["body"])}<span class="tm">{x["created"][11:16]}{tk}</span></div>'
+    im = ""
+    if x["img"]: im = (f'<a href="/chat/img/{x["img"]}" target="_blank" rel="noopener"><img class="mi" src="/chat/img/{x["img"]}" loading="lazy" alt=""></a>' if x["ie"] else f'<span class="mx">📷 {eh("Imagem expirada")}</span> ')
+    return f'<div class="mg{" a" if mine else ""}" data-id="{x["id"]}" data-day="{x["created"][:10]}">{who}{im}{e(x["body"])}<span class="tm">{x["created"][11:16]}{tk}</span></div>'
 
 def chat_panels(u, cur=0):
     me = u["id"]
@@ -545,20 +568,22 @@ def chat_panels(u, cur=0):
     def item(c, sub=None):
         dm = c["kind"] == "dm"; o = peer.get(c["id"]); title = uname(o) if dm else c["name"]
         av = uav(o) if dm and o else f'<span class="av u g">{e(ini(title))}</span>'
-        dot = f'<i class="dot" data-pres="{o["id"]}"{"" if ws.hub.online(o["id"]) else " hidden"}></i>' if dm and o else ""
+        dot = f'<i class="dot" data-pres="{o["id"]}"{"" if is_online(o["id"]) else " hidden"}></i>' if dm and o else ""
         l = last.get(c["id"]); n = unread.get(c["id"], 0)
         if sub is None:
+            lb = (l["body"][:70] or "") if l and not l["img"] else (("📷 ") if l else "")
+            ph = lambda: eh("Foto") if l and l["img"] and not l["body"] else ""
             if not l: sub = eh("Sem mensagens.")
-            elif l["user_id"] == me: sub = eh("Tu:") + " " + e(l["body"][:70])
-            elif dm: sub = e(l["body"][:70])
-            else: sub = e(uname(one("select * from users where id=?", (l["user_id"],))) + ": " + l["body"][:70])
+            elif l["user_id"] == me: sub = eh("Tu:") + " " + e(lb) + ph() + e(l["body"][:60] if l["img"] else "")
+            elif dm: sub = e(lb) + ph() + e(l["body"][:60] if l["img"] else "")
+            else: sub = e(uname(one("select * from users where id=?", (l["user_id"],))) + ": ") + e(lb) + ph() + e(l["body"][:60] if l["img"] else "")
         return (f'<a class="ci{" on" if c["id"] == cur else ""}" href="/chat/{c["id"]}" data-cid="{c["id"]}" data-q="{e(title.lower())}"><span class="avw">{av}{dot}</span>'
                 f'<span class="ct"><b>{e(title)}</b><small>{sub}</small></span><span class="cm"><span>{hm(l["created"]) if l else ""}</span>'
                 f'{f"<i class=nb>{n}</i>" if n else ""}</span></a>')
     convs = "".join(item(c) for c in cs) or '<div class="empty">Ainda não tens conversas. Adiciona um amigo para começar.</div>'
     groups = "".join(item(c, pl(nmem.get(c["id"], 1), "membro")) for c in sorted((c for c in cs if c["kind"] == "group"), key=lambda c: c["name"].lower()))
     groups = '<div style="padding:10px 12px"><a class="btn p" href="/chat/new" style="width:100%;text-align:center">Novo grupo</a></div>' + (groups or '<div class="empty">Ainda não tens grupos.</div>')
-    fr = friends_of(me); fr.sort(key=lambda r: (not ws.hub.online(r["id"]), uname(r).lower()))
+    fr = friends_of(me); fr.sort(key=lambda r: (not is_online(r["id"]), uname(r).lower()))
     pin = rows("select f.id fid, u.* from friends f join users u on u.id=f.a where f.b=? and f.status='pending' order by f.id", (me,))
     pout = rows("select f.id fid, u.* from friends f join users u on u.id=f.b where f.a=? and f.status='pending' order by f.id", (me,))
     btn = lambda url, label, cls="": f'<form method="post" action="{url}"><button class="{cls}">{label}</button></form>'
@@ -566,7 +591,7 @@ def chat_panels(u, cur=0):
     cont = ('<form class="ca" method="post" action="/chat/friend/add"><input name="q" maxlength="120" required autocomplete="off" placeholder="Utilizador ou email do teu amigo"><button class="p">Adicionar</button></form>')
     if pin: cont += '<div class="sh">Pedidos de amizade</div>' + "".join(rq(r, btn("/chat/friend/accept/" + str(r["fid"]), "Aceitar", "p") + btn("/chat/friend/remove/" + str(r["fid"]), "Recusar")) for r in pin)
     cont += "".join(f'<form method="post" action="/chat/dm/{r["id"]}"><button class="ci" data-q="{e((uname(r) + " " + r["username"]).lower())}"><span class="avw">{uav(r)}'
-                    f'<i class="dot" data-pres="{r["id"]}"{"" if ws.hub.online(r["id"]) else " hidden"}></i></span><span class="ct"><b>{e(uname(r))}</b><small data-ps="{r["id"]}">{pres_text(r)}</small></span></button></form>' for r in fr)
+                    f'<i class="dot" data-pres="{r["id"]}"{"" if is_online(r["id"]) else " hidden"}></i></span><span class="ct"><b>{e(uname(r))}</b><small data-ps="{r["id"]}">{pres_text(r)}</small></span></button></form>' for r in fr)
     if not fr: cont += '<div class="empty">Ainda não tens contactos. Adiciona o primeiro amigo acima.</div>'
     if pout: cont += '<div class="sh">Pedidos enviados</div>' + "".join(rq(r, btn("/chat/friend/remove/" + str(r["fid"]), "Cancelar pedido")) for r in pout)
     return {"c": convs, "f": cont, "g": groups, "bc": sum(unread.values()), "bf": len(pin)}
@@ -639,6 +664,7 @@ class H(BaseHTTPRequestHandler):
         try:
             i, x, sig = m.value.split("."); u = one("select * from users where id=?", (i,))
             if u and not u["disabled"] and int(x) > time.time() and hmac.compare_digest(sig, sign(f"{i}.{x}.{u['pw'][-16:]}")):
+                PULSE[u["id"]] = time.time()
                 now = dt.datetime.now().strftime("%Y-%m-%d %H:%M")
                 if (u["last_seen"] or "")[:15] != now[:15]: run("update users set last_seen=? where id=?", (now, u["id"]))
                 return u
@@ -708,7 +734,7 @@ class H(BaseHTTPRequestHandler):
         if sf == "cross-site" or (not sf and org not in (None, "null") and urlparse(org).netloc not in hosts): return self.out("Pedido recusado", 403, "text/plain")
         if urlparse(self.path).path == "/admin/db/restore": return self.restore()
         n = int(self.headers.get("Content-Length", 0) or 0)
-        self.fl = parse_qs(self.rfile.read(min(n, 200000)).decode(), keep_blank_values=True); f = {k: v[0] for k, v in self.fl.items()}
+        self.fl = parse_qs(self.rfile.read(min(n, 700000 if self.path.endswith("/send") else 200000)).decode(), keep_blank_values=True); f = {k: v[0] for k, v in self.fl.items()}
         p = urlparse(self.path).path; parts = p.strip("/").split("/")
         if p.startswith("/support"):
             try: return self.support_post(self.user(), p, f)
@@ -1370,17 +1396,21 @@ class H(BaseHTTPRequestHandler):
                     '<script nonce="__NONCE__">document.getElementById("gq").oninput=function(){var q=this.value.toLowerCase();document.querySelectorAll(".gf label").forEach(function(l){l.style.display=l.textContent.toLowerCase().indexOf(q)<0?"none":""})}</script>'
                     if fr else '<p class="m">Precisas de amigos para criar um grupo.</p>') + '</div>')
             return self.out(self.chat_shell(u, form, "g", open_=True))
+        if len(parts) == 3 and parts[1] == "img":
+            r = one("select * from chat_imgs where id=?", (int(parts[2]),))
+            if not r or not chat_member(r["chat_id"], me): raise ValueError
+            return self.out(base64.b64decode(r["data"]), 200, r["mime"], (("Cache-Control", "private, max-age=86400"),))
         cid = int(parts[1]); m = chat_member(cid, me)
         if not m: raise ValueError
         if len(parts) == 3 and parts[2] == "poll":
             bef = int(g("before", "0") or 0); aft = int(g("after", "0") or 0)
             if bef:
-                ms = rows("select m.*, u.name, u.username from chat_msgs m join users u on u.id=m.user_id where m.chat_id=? and m.id<? order by m.id desc limit 50", (cid, bef))[::-1]
+                ms = rows("select m.*, u.name, u.username, u.av_v, exists(select 1 from chat_imgs i where i.id=m.img) ie from chat_msgs m join users u on u.id=m.user_id where m.chat_id=? and m.id<? order by m.id desc limit 50", (cid, bef))[::-1]
                 more = bool(ms) and bool(one("select 1 from chat_msgs where chat_id=? and id<?", (cid, ms[0]["id"])))
             else:
-                ms = rows("select m.*, u.name, u.username from chat_msgs m join users u on u.id=m.user_id where m.chat_id=? and m.id>? order by m.id limit 100", (cid, aft)); more = False
+                ms = rows("select m.*, u.name, u.username, u.av_v, exists(select 1 from chat_imgs i where i.id=m.img) ie from chat_msgs m join users u on u.id=m.user_id where m.chat_id=? and m.id>? order by m.id limit 100", (cid, aft)); more = False
                 self.mark_read(cid, me)
-            return self.out(json.dumps({"more": more, "m": [{"id": x["id"], "me": x["user_id"] == me, "n": uname(x), "t": x["created"], "b": x["body"]} for x in ms]}), 200, "application/json", (("Cache-Control", "no-store"),))
+            return self.out(json.dumps({"more": more, "m": [{"id": x["id"], "me": x["user_id"] == me, "n": uname(x), "t": x["created"], "b": x["body"], "u": x["user_id"], "a": x["av_v"], "img": x["img"] if x["ie"] else 0, "gone": 1 if x["img"] and not x["ie"] else 0} for x in ms]}), 200, "application/json", (("Cache-Control", "no-store"),))
         return self.out(self.chat_room(u, cid, g("ok")))
 
     def mark_read(self, cid, me):
@@ -1393,7 +1423,7 @@ class H(BaseHTTPRequestHandler):
     def chat_room(self, u, cid, k=""):
         me = u["id"]; c = one("select * from chats where id=?", (cid,)); grp = c["kind"] == "group"; owner = c["owner"] == me
         mem = rows("select u.* from chat_members m join users u on u.id=m.user_id where m.chat_id=? order by lower(coalesce(nullif(u.name,''),u.username))", (cid,))
-        ms = rows("select m.*, u.name, u.username from chat_msgs m join users u on u.id=m.user_id where m.chat_id=? order by m.id desc limit 60", (cid,))[::-1]
+        ms = rows("select m.*, u.name, u.username, u.av_v, exists(select 1 from chat_imgs i where i.id=m.img) ie from chat_msgs m join users u on u.id=m.user_id where m.chat_id=? order by m.id desc limit 60", (cid,))[::-1]
         more = bool(ms) and bool(one("select 1 from chat_msgs where chat_id=? and id<?", (cid, ms[0]["id"])))
         peer = None if grp else next((x for x in mem if x["id"] != me), None); plr = (chat_member(cid, peer["id"])["last_read"] or 0) if peer else 0
         out, day = [], ""
@@ -1413,14 +1443,14 @@ class H(BaseHTTPRequestHandler):
             menu = (f'<div class="gp"><b>Informação do grupo</b>{rows_m}{addf}<div class="row2" style="margin-top:10px"><form method="post" action="{base}/leave"><button>Sair do grupo</button></form>'
                     + (f'<form method="post" action="{base}/delete"><button class="d">Apagar grupo</button></form>' if owner else "") + "</div></div>")
         else:
-            title = e(uname(peer)); av = f'<span class="avw">{uav(peer)}<i class="dot" data-pres="{peer["id"]}"{"" if ws.hub.online(peer["id"]) else " hidden"}></i></span>'
+            title = e(uname(peer)); av = f'<span class="avw">{uav(peer)}<i class="dot" data-pres="{peer["id"]}"{"" if is_online(peer["id"]) else " hidden"}></i></span>'
             sub = f'<small id="rs" data-ps="{peer["id"]}">{pres_text(peer)}</small>'
             f_ = one("select id from friends where status='ok' and ((a=? and b=?) or (a=? and b=?))", (me, peer["id"], peer["id"], me))
             menu = f'<div class="gp"><div class="mb">{uav(peer)}<span><b>{title}</b><br><span class="m">@{e(peer["username"])}</span></span></div><form method="post" action="/chat/friend/remove/{f_["id"] if f_ else 0}"><button class="d">Remover amigo</button></form></div>'
         right = (f'<header class="rh"><a class="back" href="/chat">‹</a>{av}<div class="rt"><b>{title}</b>{sub}</div><details class="gi"><summary>⋮</summary>{menu}</details></header>{fl}'
                  f'<div class="rm" id="msgs" data-cid="{cid}" data-dm="{0 if grp else 1}" data-last="{ms[-1]["id"] if ms else 0}" data-first="{ms[0]["id"] if ms else 0}" data-day="{ms[-1]["created"][:10] if ms else ""}">'
                  f'{"<button type=button id=more>Carregar mensagens anteriores</button>" if more else ""}{"".join(out)}</div>'
-                 f'<form class="rc" id="sf" method="post" action="{base}/send"><input name="body" maxlength="1000" autocomplete="off" required placeholder="Escreve uma mensagem..."><button class="p">Enviar</button></form>')
+                 f'<form class="rc" id="sf" method="post" action="{base}/send"><div class="ep" id="ep" hidden></div><button type="button" class="ib" id="eb" title="Emojis" aria-label="Emojis">😊</button><button type="button" class="ib" id="ib" title="Enviar imagem (apagada ao fim de 5 dias)" aria-label="Enviar imagem">📷</button><input type="file" id="if" accept="image/*" hidden><input name="body" maxlength="1000" autocomplete="off" placeholder="Escreve uma mensagem..."><button class="p">Enviar</button></form>')
         return self.chat_shell(u, right, "g" if grp else "c", open_=True, cur=cid)
 
     def chat_post(self, u, p, parts, f):
@@ -1467,10 +1497,18 @@ class H(BaseHTTPRequestHandler):
             if act == "send":
                 ip = "c" + str(me); n, t0 = self.fails.get(ip, (0, 0)); body = f.get("body", "").strip()[:1000]
                 self.fails[ip] = (n + 1 if time.time() - t0 < 60 else 1, time.time())
-                if body and not (n >= 40 and time.time() - t0 < 60):
-                    now = now_str(); mid = run("insert into chat_msgs(chat_id,user_id,body,created) values(?,?,?,?)", (cid, me, body, now))
+                im = re.match(r"^data:image/(jpeg|png|webp);base64,([A-Za-z0-9+/=]+)$", f.get("img", "")[:560000]) if f.get("img") else None
+                raw = b""
+                if im:
+                    try: raw = base64.b64decode(im.group(2), validate=True)
+                    except ValueError: raw = b""
+                    if len(raw) > 420000 or not (raw[:3] == b"\xff\xd8\xff" or raw[:8] == b"\x89PNG\r\n\x1a\n" or (raw[:4] == b"RIFF" and raw[8:12] == b"WEBP")): raw = b""
+                if (body or raw) and not (n >= 40 and time.time() - t0 < 60):
+                    now = now_str(); iid = 0
+                    if raw: iid = run("insert into chat_imgs(chat_id,mime,data,created) values(?,?,?,?)", (cid, "image/" + im.group(1), im.group(2), now))
+                    mid = run("insert into chat_msgs(chat_id,user_id,body,created,img) values(?,?,?,?,?)", (cid, me, body, now, iid))
                     run("update chat_members set last_read=? where chat_id=? and user_id=?", (mid, cid, me))
-                    ws.hub.push(member_ids(cid), {"e": "msg", "c": cid, "id": mid, "u": me, "n": uname(u), "b": body, "t": now})
+                    ws.hub.push(member_ids(cid), {"e": "msg", "c": cid, "id": mid, "u": me, "n": uname(u), "a": u["av_v"], "b": body, "t": now, "img": iid})
                 return self.out("ok", 200, "text/plain") if f.get("ajax") else self.go(room)
             if c["kind"] != "group": return self.go(room)
             mem = member_ids(cid)
@@ -1626,5 +1664,5 @@ class H(BaseHTTPRequestHandler):
         self.go("/settings?ok=password", [session_cookie(nu, self.https())])
 
 if __name__ == "__main__":
-    init(); threading.Thread(target=backup_loop, daemon=True).start(); print("Claquete a escutar na porta 8000 | email:", "ativo" if smtp_ready() else "desligado", "| BASE_URL:", BASE_URL or "(vazio)", flush=True)
+    init(); threading.Thread(target=backup_loop, daemon=True).start(); threading.Thread(target=img_loop, daemon=True).start(); print("Claquete a escutar na porta 8000 | email:", "ativo" if smtp_ready() else "desligado", "| BASE_URL:", BASE_URL or "(vazio)", flush=True)
     ThreadingHTTPServer(("0.0.0.0", 8000), H).serve_forever()

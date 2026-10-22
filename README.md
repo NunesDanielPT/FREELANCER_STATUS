@@ -40,6 +40,8 @@ As traduções estão em `i18n.py`: para corrigir uma frase edita a linha respet
 
 - Servidor WebSocket próprio (sem dependências) no mesmo porto: mensagens instantâneas, "online / visto por último", "a escrever…", ✓ enviado / ✓✓ lido e contadores de não lidas.
 - Interface tipo WhatsApp/Telegram: lista com separadores **Conversas · Contactos · Grupos**, pesquisa, ponto verde de presença e mensagens não lidas.
+- Emojis e imagens no chat (também em grupos). As imagens são guardadas na base de dados e **apagadas ao fim de 5 dias** (a mensagem fica com "Imagem expirada").
+- A presença (anel verde à volta da foto) funciona também sem WebSocket, com atualização a cada ~15 s.
 - Se o WebSocket falhar, o chat continua a funcionar por polling.
 - **Reverse proxy:** tem de deixar passar WebSockets. No Nginx Proxy Manager, ativa **"Websockets Support"** no Proxy Host. Em Nginx puro: `proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade"; proxy_read_timeout 3600s;`.
 
