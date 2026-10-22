@@ -36,5 +36,8 @@ As traduções estão em `i18n.py`: para corrigir uma frase edita a linha respet
 - As mensagens chegam a **Admin > Suporte** (com contador de novas). Respondes lá; a resposta aparece na conversa do utilizador (ou no link da conversa, para visitantes) e é enviada por email se o SMTP estiver configurado. Também recebes um email de cada mensagem nova.
 - Página **Sobre** (`/about`) explica para que serve o site e quem o fez.
 
+## Chat
+Aba **Chat**: adiciona amigos pelo utilizador ou email (a outra pessoa tem de aceitar), troca mensagens privadas com os amigos e cria grupos só com amigos (o dono do grupo adiciona/remove membros). Só quem é amigo pode falar contigo; os administradores não leem as conversas. As mensagens novas aparecem sozinhas (atualiza a cada poucos segundos) e há um contador de não lidas no menu.
+
 ## Admin
-A primeira conta registada é administradora. Ícone **Admin** no menu: resumo e avisos, contas (editar email, repor password, suspender, apagar), mensagens de suporte, nome/cores/textos do site, publicidade, backups (automático diário em `/data/backups`), restauro e consola SQL.
+A primeira conta registada é administradora. Ícone **Admin** no menu: resumo e avisos, contas (editar email, repor password, suspender, apagar), mensagens de suporte, apagar contas (também várias de uma vez), promover administradores pesquisando por utilizador ou email, nome/cores/textos do site, publicidade, backups (automático diário em `/data/backups`), restauro e consola SQL.

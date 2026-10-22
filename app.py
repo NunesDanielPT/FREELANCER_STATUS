@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Claquete - organizador de eventos e faturas para freelancers (so biblioteca standard)."""
-import os, re, ssl, time, math, hmac, html, hashlib, secrets, sqlite3, smtplib, calendar, threading, struct, zlib
+import json, os, re, ssl, time, math, hmac, html, hashlib, secrets, sqlite3, smtplib, calendar, threading, struct, zlib
 from functools import lru_cache
 import datetime as dt
 from email.message import EmailMessage
@@ -251,6 +251,10 @@ def init():
     create table if not exists kv(k text primary key, v text);
     create table if not exists tickets(id integer primary key, token text unique, user_id integer, name text, email text, subject text, status text default 'open',
       lang text, created text, updated text, unread_admin integer default 1, unread_user integer default 0);
+    create table if not exists friends(id integer primary key, a integer not null, b integer not null, status text default 'pending', created text, unique(a, b));
+    create table if not exists chats(id integer primary key, kind text, name text, owner integer, created text);
+    create table if not exists chat_members(chat_id integer references chats(id) on delete cascade, user_id integer, last_read integer default 0, primary key(chat_id, user_id));
+    create table if not exists chat_msgs(id integer primary key, chat_id integer references chats(id) on delete cascade, user_id integer, body text, created text);
     create table if not exists tmsgs(id integer primary key, ticket_id integer references tickets(id) on delete cascade, from_admin integer default 0, body text, created text);""")
     if not c.execute("select 1 from kv where k='secret'").fetchone():
         c.execute("insert into kv values('secret',?)", (secrets.token_hex(32),))
@@ -374,6 +378,9 @@ code,textarea.mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.
 .btn.sup{width:100%;text-align:center}.btn.sup svg{width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round;vertical-align:-3px;margin-right:6px}
 .msgs{display:flex;flex-direction:column;gap:10px;margin:16px 0}.mg{max-width:90%;padding:10px 14px;border-radius:14px;background:var(--sf);border:1px solid var(--line);white-space:pre-wrap;overflow-wrap:anywhere}
 .mg.a{align-self:flex-end;background:color-mix(in srgb,var(--brand) 12%,var(--sf));border-color:color-mix(in srgb,var(--brand) 30%,var(--line))}.mg small{display:block;color:var(--mut);font-size:.75rem;margin-bottom:2px}
+.nl{position:relative}.nb{background:var(--todo);color:#fff;border-radius:99px;font-size:.68rem;font-weight:700;padding:0 6px;min-width:18px;text-align:center;line-height:18px;font-style:normal;margin-left:auto}
+@media(max-width:820px){.nl .nb{position:absolute;top:1px;left:calc(50% + 6px);margin:0}}
+.chatbox{height:min(58vh,520px);overflow:auto;margin:14px 0;padding:4px 2px}.chatbox .msgs{margin:0}.row2 input[type=text],.row2 input:not([type]){flex:1;min-width:180px}
 .ab li{margin:7px 0}.ab ul{padding-left:20px;margin:6px 0}.cr{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 """
 
@@ -383,7 +390,7 @@ IC = {"home": '<path d="M3 11l9-8 9 8v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z
       "users": '<circle cx="12" cy="8" r="4"/><path d="M4 21c1-4 4-6 8-6s7 2 8 6"/>',
       "chart": '<path d="M5 20V11M12 20V4M19 20v-6"/>',
       "gear": '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9L7 7M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"/>'}
-NAV = [("/", "Início", "home"), ("/calendar", "Calendário", "cal"), ("/events", "Eventos", "list"), ("/clients", "Clientes", "users"), ("/stats", "Estatísticas", "chart")]
+NAV = [("/", "Início", "home"), ("/calendar", "Calendário", "cal"), ("/events", "Eventos", "list"), ("/clients", "Clientes", "users"), ("/chat", "Chat", "chat"), ("/stats", "Estatísticas", "chart")]
 IC["shield"] = '<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M9 12l2 2 4-4"/>'
 IC["chat"] = '<path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/>'
 FLAG = ('<svg class="flag" viewBox="0 0 30 20" role="img" aria-label="Portugal"><rect width="30" height="20" fill="#d4202c"/><rect width="12" height="20" fill="#046a38"/>'
@@ -406,7 +413,8 @@ def head(t, c):
 
 def page(title, body, active, u):
     c = cfg(); sn = e(c["site_name"]); lg = logo(c)
-    nav = "".join(f'<a class="nl{" on" if h == active else ""}" href="{h}"><svg viewBox="0 0 24 24">{IC[i]}</svg><span>{n}</span></a>' for h, n, i in NAV)
+    cb = chat_badge(u["id"])
+    nav = "".join(f'<a class="nl{" on" if h == active else ""}" href="{h}"><svg viewBox="0 0 24 24">{IC[i]}</svg><span>{n}</span>{f"<i class=nb>{cb}</i>" if cb and h == "/chat" else ""}</a>' for h, n, i in NAV)
     adm = f'<a class="nl acct{" on" if active == "/admin" else ""}" href="/admin"><svg viewBox="0 0 24 24">{IC["shield"]}</svg><span>Admin</span></a>' if u["is_admin"] else ""
     madm = '<a class="btn" style="padding:4px 12px" href="/admin">Admin</a>' if u["is_admin"] else ""
     nu = one("select count(*) from tickets where user_id=? and unread_user=1", (u["id"],))[0]
@@ -432,6 +440,34 @@ def auth_page(title, inner):
 def pub_page(title, body):
     c = cfg(); sn = e(c["site_name"]); lg = logo(c)
     return head(eh(title) + " · " + sn, c) + f'<div class="pub"><a class="brand" href="/">{lg}{sn}</a><main>{ad_html(c, "auth")}{body}{foot()}</main></div></body></html>'
+
+def uname(r): return (r["name"] or r["username"]) if r else "?"
+
+def friends_of(uid):
+    return rows("select u.* from friends f join users u on u.id = case when f.a=? then f.b else f.a end where f.status='ok' and (f.a=? or f.b=?) and u.disabled=0 order by lower(coalesce(nullif(u.name,''),u.username))", (uid, uid, uid))
+
+def chat_member(cid, uid): return one("select * from chat_members where chat_id=? and user_id=?", (cid, uid))
+
+def dm_chat(a, b):
+    r = one("select c.id from chats c join chat_members x on x.chat_id=c.id and x.user_id=? join chat_members y on y.chat_id=c.id and y.user_id=? where c.kind='dm'", (a, b))
+    if r: return r["id"]
+    cid = run("insert into chats(kind,name,owner,created) values('dm','',?,?)", (a, now_str()))
+    run("insert into chat_members(chat_id,user_id) values(?,?)", (cid, a)); run("insert into chat_members(chat_id,user_id) values(?,?)", (cid, b))
+    return cid
+
+def chat_badge(uid):
+    un = one("select count(*) from chat_msgs m join chat_members cm on cm.chat_id=m.chat_id and cm.user_id=? where m.id>cm.last_read and m.user_id!=?", (uid, uid))[0]
+    return un + one("select count(*) from friends where b=? and status='pending'", (uid,))[0]
+
+def purge_user(tid):
+    run("delete from events where user_id=?", (tid,)); run("delete from clients where user_id=?", (tid,)); run("delete from tickets where user_id=?", (tid,))
+    run("delete from friends where a=? or b=?", (tid, tid))
+    run("delete from chats where kind='dm' and id in (select chat_id from chat_members where user_id=?)", (tid,))
+    run("delete from chat_msgs where user_id=?", (tid,))
+    run("update chats set owner=(select user_id from chat_members where chat_id=chats.id and user_id!=? limit 1) where owner=?", (tid, tid))
+    run("delete from chat_members where user_id=?", (tid,))
+    run("delete from chats where id not in (select chat_id from chat_members)")
+    run("delete from users where id=?", (tid,))
 
 def shell(title, body, u, active=""): return page(title, body, active, u) if u else pub_page(title, body)
 
@@ -519,6 +555,7 @@ class H(BaseHTTPRequestHandler):
         parts = p.strip("/").split("/")
         try:
             if parts[0] == "admin": return self.admin_get(u, p, parts, g)
+            if parts[0] == "chat": return self.chat_get(u, p, parts, g)
             if p == "/": return self.out(self.home(u, g("m")))
             if p == "/calendar": return self.out(self.cal(u, g("m")))
             if p == "/events": return self.out(self.events(u, g("f", "todos")))
@@ -548,6 +585,9 @@ class H(BaseHTTPRequestHandler):
         if not u: return self.go("/login")
         if p == "/logout": return self.go("/login", [("Set-Cookie", "s=; Max-Age=0; Path=/")])
         if parts[0] == "admin": return self.admin_post(u, p, parts, f)
+        if parts[0] == "chat":
+            try: return self.chat_post(u, p, parts, f)
+            except (ValueError, KeyError, IndexError): return self.go("/chat")
         i = u["id"]; nxt = f.get("next", "/"); nxt = nxt if nxt.startswith("/") and not nxt.startswith("//") else "/"
         if parts[0] == "toggle" and len(parts) == 3:
             r = one("select * from events where id=? and user_id=?", (parts[1], i)); t = today().isoformat()
@@ -659,7 +699,8 @@ class H(BaseHTTPRequestHandler):
     TABS = [("/admin", "Resumo"), ("/admin/users", "Utilizadores"), ("/admin/site", "Site"), ("/admin/ads", "Publicidade"), ("/admin/support", "Suporte"), ("/admin/db", "Base de dados")]
     FLASH = {"texts": "Textos e registo guardados.", "colors": "Cores guardadas.", "reset": "Cores repostas.", "ads": "Publicidade guardada.", "user": "Dados guardados.",
              "pw": "Palavra-passe definida. A pessoa tem de entrar de novo.", "ics": "Link do calendário renovado.", "state": "Estado atualizado.", "snap": "Backup criado.", "newadmin": "Administrador adicionado.",
-             "reply": "Resposta enviada.", "closed": "Conversa fechada.", "reopened": "Conversa reaberta.", "deleted": "Conversa apagada."}
+             "reply": "Resposta enviada.", "closed": "Conversa fechada.", "reopened": "Conversa reaberta.", "deleted": "Conversa apagada.",
+             "bulkdel": "Contas apagadas.", "nosel": "Seleciona pelo menos uma conta e marca a confirmação.", "nouser": "Não encontrámos essa conta (ou já é administradora)."}
 
     def apage(self, u, tab, body, ok="", err=""):
         ns = one("select count(*) from tickets where unread_admin=1")[0]
@@ -708,16 +749,22 @@ class H(BaseHTTPRequestHandler):
     def a_users(self, u, ok=""):
         us = rows("select u.*, (select count(*) from events where user_id=u.id) ne, (select count(*) from clients where user_id=u.id) nc from users u order by id")
         bd = lambda x: ('<span class="bd a">Admin</span> ' if x["is_admin"] else "") + ('<span class="bd s">Suspensa</span>' if x["disabled"] else "")
-        tr = "".join(f'<tr><td><a href="/admin/user/{x["id"]}"><b>{e(x["name"] or x["username"])}</b></a><br><span class="m">@{e(x["username"])}</span></td><td class="l">{e(x["email"])}</td>'
+        chk = lambda x: "" if x["id"] == u["id"] else f'<input type="checkbox" name="ids" value="{x["id"]}">'
+        tr = "".join(f'<tr class="ur"><td>{chk(x)}</td><td><a href="/admin/user/{x["id"]}"><b>{e(x["name"] or x["username"])}</b></a><br><span class="m">@{e(x["username"])}</span></td><td class="l">{e(x["email"])}</td>'
                      f'<td>{e(x["created"])}</td><td>{e(x["last_seen"]) if x["last_seen"] else "nunca"}</td><td>{x["ne"]}</td><td>{x["nc"]}</td><td>{bd(x)}</td></tr>' for x in us)
-        cand = "".join(f'<option value="{x["id"]}">{e(x["name"] or x["username"])} (@{e(x["username"])}) · {e(x["email"])}</option>' for x in us if not x["is_admin"] and not x["disabled"])
+        cand = "".join(f'<option value="{e(x["username"])}">{e(x["name"] or x["username"])} · {e(x["email"])}</option>' for x in us if not x["is_admin"] and not x["disabled"])
         adm = ", ".join(f'<a href="/admin/user/{x["id"]}"><b>{e(x["name"] or x["username"])}</b></a>' for x in us if x["is_admin"])
         addf = ('<form class="f card" method="post" action="/admin/users/promote"><h2>Administradores</h2><p class="m">Atuais: ' + adm + '. Os administradores veem e gerem todas as contas e dados. '
                 'Para adicionar alguém, essa pessoa tem de ter criado conta primeiro.</p>'
-                + (f'<label>Adicionar administrador</label><div class="row2"><select name="uid" style="flex:1;min-width:220px;width:auto" required>{cand}</select><button class="p">Tornar admin</button></div>' if cand
+                + (f'<label>Adicionar administrador</label><div class="row2"><input name="q" list="ulist" autocomplete="off" placeholder="Escreve o utilizador ou email" required><datalist id="ulist">{cand}</datalist><button class="p">Tornar admin</button></div>'
+                    '<p class="m">Escreve parte do nome, utilizador ou email e escolhe da lista.</p>' if cand
                    else '<p class="m">Não há mais contas para promover.</p>') + '</form>')
         return self.apage(u, "/admin/users", addf + f'<p class="m">{len(us)} contas. Clica num nome para editar, mudar o email, repor a palavra-passe ou suspender.</p>'
-                          f'<div class="card sc"><table class="tb"><tr><th>Conta</th><th class="l">Email</th><th>Registo</th><th>Último acesso</th><th>Eventos</th><th>Clientes</th><th></th></tr>{tr}</table></div>', ok)
+                          '<input id="uf" placeholder="Procurar na lista..." style="margin-bottom:10px;width:100%;padding:10px 12px;border-radius:10px;border:1px solid var(--line);background:var(--sf);color:var(--ink);font:inherit" autocomplete="off">'
+                          f'<form method="post" action="/admin/users/bulkdelete"><div class="card sc"><table class="tb" id="ut"><tr><th></th><th>Conta</th><th class="l">Email</th><th>Registo</th><th>Último acesso</th><th>Eventos</th><th>Clientes</th><th></th></tr>{tr}</table></div>'
+                          '<div class="card"><h2 style="margin-top:0">Apagar contas selecionadas</h2><label class="c"><input type="checkbox" name="confirm">Confirmo: apagar as contas selecionadas e todos os seus dados (é feito um backup antes)</label>'
+                          '<p><button class="d">Apagar contas selecionadas</button></p></div></form>'
+                          '<script nonce="__NONCE__">document.getElementById("uf").oninput=function(){var q=this.value.toLowerCase();document.querySelectorAll("#ut tr.ur").forEach(function(r){r.style.display=r.textContent.toLowerCase().indexOf(q)<0?"none":""})}</script>', ok)
 
     def a_user(self, u, tid, ok="", err="", link=""):
         t = one("select * from users where id=?", (tid,))
@@ -818,9 +865,18 @@ class H(BaseHTTPRequestHandler):
                      "ad_text": f.get("ad_text", "").strip()[:120], "ad_app": yes("ad_app"), "ad_auth": yes("ad_auth")})
             return self.go("/admin/ads?ok=ads")
         if p == "/admin/users/promote":
-            t = one("select * from users where id=? and disabled=0", (f.get("uid") or 0,))
+            q = f.get("q", "").strip()[:120].lower()
+            ts = [r for r in rows("select * from users where disabled=0 and is_admin=0") if q and (q in r["username"].lower() or q in (r["email"] or "").lower() or q in (r["name"] or "").lower())]
+            ex = [r for r in ts if q in (r["username"].lower(), (r["email"] or "").lower())]
+            t = ex[0] if ex else (ts[0] if len(ts) == 1 else None)
             if t: run("update users set is_admin=1 where id=?", (t["id"],)); return self.go("/admin/users?ok=newadmin")
-            return self.go("/admin/users")
+            return self.go("/admin/users?ok=nouser")
+        if p == "/admin/users/bulkdelete":
+            ids = [int(x) for x in self.fl.get("ids", []) if x.isdigit() and int(x) != u["id"]]
+            if not ids or not f.get("confirm"): return self.go("/admin/users?ok=nosel")
+            make_backup("predelete")
+            for x in ids: purge_user(x)
+            return self.go("/admin/users?ok=bulkdel")
         if len(parts) == 4 and parts[1] == "support":
             t = one("select * from tickets where id=?", (parts[2],))
             if not t: return self.go("/admin/support")
@@ -874,7 +930,7 @@ class H(BaseHTTPRequestHandler):
                 if me: return bad("Não podes apagar a tua própria conta aqui.")
                 if f.get("confirm", "").strip().lower() != t["username"].lower(): return bad("Para apagar, escreve exatamente o nome de utilizador.")
                 make_backup("predelete")
-                run("delete from events where user_id=?", (tid,)); run("delete from clients where user_id=?", (tid,)); run("delete from tickets where user_id=?", (tid,)); run("delete from users where id=?", (tid,))
+                purge_user(tid)
                 return self.go("/admin/users")
         self.go("/admin")
 
@@ -1065,6 +1121,153 @@ class H(BaseHTTPRequestHandler):
                 o += f'<rect class="{c}" x="{L + k * sl + sl * .17 + j * (bw + 2):.1f}" y="{T + ph - h:.1f}" width="{bw:.1f}" height="{h:.1f}" rx="3"><title>{MES[k]}: {eur(arr[k])}</title></rect>'
             o += f'<text x="{L + k * sl + sl / 2:.1f}" y="{H - 7}" text-anchor="middle">{MES[k][:3]}</text>'
         return o + "</svg>"
+
+    # ---- chat
+    CHM = {"sent": "Pedido de amizade enviado.", "already": "Já são amigos.", "pend": "Já enviaste um pedido a esta pessoa.", "accepted": "Agora são amigos.",
+           "nouser": "Não encontrámos ninguém com esse utilizador ou email.", "self": "Não podes adicionar-te a ti próprio.", "limit": "Demasiados pedidos. Tenta mais tarde.",
+           "reqgone": "Pedido removido.", "fgone": "Amigo removido.", "gnew": "Grupo criado.", "noname": "Dá um nome ao grupo.", "madd": "Membro adicionado.",
+           "left": "Saíste do grupo.", "gdel": "Grupo apagado.", "kick": "Membro removido."}
+    CHERR = ("nouser", "self", "limit", "noname")
+
+    def chat_get(self, u, p, parts, g):
+        if p == "/chat": return self.out(self.chat_home(u, g("ok")))
+        cid = int(parts[1]); me = u["id"]; m = chat_member(cid, me)
+        if not m: raise ValueError
+        if len(parts) == 3 and parts[2] == "poll":
+            after = int(g("after", "0") or 0)
+            ms = rows("select m.*, u.name, u.username from chat_msgs m join users u on u.id=m.user_id where m.chat_id=? and m.id>? order by m.id limit 100", (cid, after))
+            mx = one("select coalesce(max(id),0) from chat_msgs where chat_id=?", (cid,))[0]
+            if mx > (m["last_read"] or 0): run("update chat_members set last_read=? where chat_id=? and user_id=?", (mx, cid, me))
+            return self.out(json.dumps({"m": [{"id": x["id"], "me": x["user_id"] == me, "n": uname(x), "t": x["created"], "b": x["body"]} for x in ms]}), 200, "application/json")
+        return self.out(self.chat_room(u, cid, g("ok")))
+
+    def chat_home(self, u, k=""):
+        me = u["id"]; fl = f'<p class="msg {"err" if k in self.CHERR else "ok"}">{eh(self.CHM[k])}</p>' if k in self.CHM else ""
+        cs = rows("select c.*, (select max(id) from chat_msgs where chat_id=c.id) lastid, m.last_read from chats c join chat_members m on m.chat_id=c.id and m.user_id=? order by coalesce(lastid,0) desc, c.id desc", (me,))
+        def crow(c):
+            if c["kind"] == "dm":
+                o = one("select u.* from chat_members m join users u on u.id=m.user_id where m.chat_id=? and m.user_id!=?", (c["id"], me)); title = uname(o); bd = ""
+            else: title, bd = c["name"], ' <span class="bd">Grupo</span>'
+            last = one("select m.body, m.user_id, u.name, u.username from chat_msgs m join users u on u.id=m.user_id where m.chat_id=? order by m.id desc limit 1", (c["id"],))
+            nu = one("select count(*) from chat_msgs where chat_id=? and id>? and user_id!=?", (c["id"], c["last_read"] or 0, me))[0]
+            prev = e((((uname(last) + ": ") if c["kind"] == "group" and last["user_id"] != me else "") + last["body"])[:70]) if last else "Sem mensagens."
+            return (f'<div class="er {"todo" if nu else ""}"><a class="eh" href="/chat/{c["id"]}">{avatar(title, "")}<div><b>{e(title)}</b>{bd}<small>{prev}</small></div></a>'
+                    f'{f"<i class=nb>{nu}</i>" if nu else ""}</div>')
+        convs = "".join(crow(c) for c in cs) or '<div class="empty">Ainda não tens conversas. Adiciona um amigo para começar.</div>'
+        fr = friends_of(me)
+        pin = rows("select f.id fid, u.* from friends f join users u on u.id=f.a where f.b=? and f.status='pending' order by f.id", (me,))
+        pout = rows("select f.id fid, u.* from friends f join users u on u.id=f.b where f.a=? and f.status='pending' order by f.id", (me,))
+        who = lambda r: f'<div class="eh">{avatar(uname(r), "")}<div><b>{e(uname(r))}</b><small>@{e(r["username"])}</small></div></div>'
+        btn = lambda url, label, cls="": f'<form method="post" action="{url}"><button class="{cls}">{label}</button></form>'
+        reqin = ("<h2>Pedidos recebidos</h2><div class=\"list\">" + "".join(f'<div class="er">{who(r)}<div class="row2">{btn("/chat/friend/accept/" + str(r["fid"]), "Aceitar", "p")}{btn("/chat/friend/remove/" + str(r["fid"]), "Recusar")}</div></div>' for r in pin) + "</div>") if pin else ""
+        reqout = ("<h2>Pedidos enviados</h2><div class=\"list\">" + "".join(f'<div class="er">{who(r)}{btn("/chat/friend/remove/" + str(r["fid"]), "Cancelar pedido")}</div>' for r in pout) + "</div>") if pout else ""
+        frows = ""
+        for r in fr:
+            f_ = one("select id from friends where status='ok' and ((a=? and b=?) or (a=? and b=?))", (me, r["id"], r["id"], me))
+            frows += f'<div class="er">{who(r)}<div class="row2">{btn("/chat/dm/" + str(r["id"]), "Mensagem", "p")}{btn("/chat/friend/remove/" + str(f_["id"]), "Remover")}</div></div>'
+        friends = f'<div class="list">{frows or "<div class=empty>Ainda não tens amigos.</div>"}</div>'
+        grp = ('<form class="f card" method="post" action="/chat/group/new"><h2>Novo grupo</h2>' + fld("Nome do grupo", "name", extra='maxlength="40" required')
+               + '<label>Escolhe os amigos para o grupo:</label>' + "".join(f'<label class="c"><input type="checkbox" name="m" value="{r["id"]}">{e(uname(r))} <span class="m">@{e(r["username"])}</span></label>' for r in fr)
+               + '<p><button class="p">Criar grupo</button></p></form>') if fr else '<div class="card"><h2 style="margin-top:0">Novo grupo</h2><p class="m" style="margin:0">Precisas de amigos para criar um grupo.</p></div>'
+        add = ('<form class="f card" method="post" action="/chat/friend/add" style="margin-top:18px"><h2>Adicionar amigo</h2><div class="row2"><input name="q" maxlength="120" required autocomplete="off" placeholder="Utilizador ou email do teu amigo">'
+               '<button class="p">Enviar pedido</button></div></form>')
+        return page("Chat", f'<h1>Chat</h1>{fl}<h2 style="margin-top:8px">Conversas</h2><div class="list">{convs}</div>{reqin}<h2>Amigos</h2>{friends}{reqout}{add}{grp}', "/chat", u)
+
+    def chat_room(self, u, cid, k=""):
+        me = u["id"]; c = one("select * from chats where id=?", (cid,)); fl = f'<p class="msg {"err" if k in self.CHERR else "ok"}">{eh(self.CHM[k])}</p>' if k in self.CHM else ""
+        mem = rows("select u.*, 1 x from chat_members m join users u on u.id=m.user_id where m.chat_id=? order by lower(coalesce(nullif(u.name,''),u.username))", (cid,))
+        ms = rows("select m.*, u.name, u.username from chat_msgs m join users u on u.id=m.user_id where m.chat_id=? order by m.id desc limit 80", (cid,))[::-1]
+        mx = ms[-1]["id"] if ms else 0
+        run("update chat_members set last_read=(select coalesce(max(id),0) from chat_msgs where chat_id=?) where chat_id=? and user_id=?", (cid, cid, me))
+        grp = c["kind"] == "group"; owner = c["owner"] == me
+        if grp: title = e(c["name"])
+        else:
+            o = [x for x in mem if x["id"] != me]; title = e(uname(o[0]) if o else "?")
+        bub = "".join(f'<div class="mg{" a" if x["user_id"] == me else ""}"><small>{"" if x["user_id"] == me else e(uname(x)) + " · "}{e(x["created"])}</small>{e(x["body"])}</div>' for x in ms)
+        side = ""
+        if grp:
+            base = f"/chat/{cid}"
+            names = ", ".join(f'{e(uname(x))}{" (Dono)" if x["id"] == c["owner"] else ""}' for x in mem)
+            kick = ""
+            if owner:
+                inids = {x["id"] for x in mem}; cand = [x for x in friends_of(me) if x["id"] not in inids]
+                addf = (f'<form method="post" action="{base}/add" class="row2"><select name="uid" style="flex:1;min-width:180px;width:auto" required><option value="">— escolhe um amigo —</option>'
+                        + "".join(f'<option value="{x["id"]}">{e(uname(x))}</option>' for x in cand) + '</select><button>Adicionar</button></form>') if cand else '<p class="m">Todos os teus amigos já estão neste grupo.</p>'
+                kick = "".join(f'<form method="post" action="{base}/kick/{x["id"]}" style="display:inline"><button class="d" style="padding:3px 10px;margin:2px">✕ {e(uname(x))}</button></form>' for x in mem if x["id"] != me)
+                side = f'<details><summary>Adicionar ao grupo</summary><div class="card">{addf}<p>{kick}</p></div></details>'
+            side += (f'<div class="row2" style="margin-top:10px"><form method="post" action="{base}/leave"><button>Sair do grupo</button></form>'
+                     + (f'<form method="post" action="{base}/delete"><button class="d">Apagar grupo</button></form>' if owner else "") + "</div>")
+        sub = f'<p class="sub" style="margin:0">Membros: {names}</p>' if grp else ""
+        return page("Chat", f'<p><a class="m" href="/chat">‹ Chat</a></p><h1 style="margin-bottom:2px">{title}</h1>{sub}{fl}'
+            f'<div class="chatbox" id="msgs" data-last="{mx}"><div class="msgs" id="ml">{bub or ""}</div></div>'
+            f'<form class="row2" id="sf" method="post" action="/chat/{cid}/send"><input name="body" maxlength="1000" autocomplete="off" required placeholder="Escreve uma mensagem..."><button class="p">Enviar</button></form>{side}'
+            '<script nonce="__NONCE__">(function(){var B=document.getElementById("msgs"),M=document.getElementById("ml"),F=document.getElementById("sf"),I=F.elements.body,last=+B.dataset.last,busy=0;'
+            'function add(x){var d=document.createElement("div");d.className="mg"+(x.me?" a":"");var s=document.createElement("small");s.textContent=(x.me?"":x.n+" \\u00b7 ")+x.t;d.appendChild(s);d.appendChild(document.createTextNode(x.b));M.appendChild(d);if(x.id>last)last=x.id}'
+            'function poll(){if(busy)return;busy=1;fetch("/chat/' + str(cid) + '/poll?after="+last,{credentials:"same-origin"}).then(function(r){return r.json()}).then(function(j){var at=B.scrollHeight-B.scrollTop-B.clientHeight<90;j.m.forEach(add);if(j.m.length&&at)B.scrollTop=B.scrollHeight;busy=0}).catch(function(){busy=0})}'
+            'F.onsubmit=function(ev){ev.preventDefault();var b=I.value.trim();if(!b)return;I.value="";fetch(F.action,{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:"ajax=1&body="+encodeURIComponent(b)}).then(function(){busy=0;poll();setTimeout(function(){B.scrollTop=B.scrollHeight},250)})};'
+            'B.scrollTop=B.scrollHeight;setInterval(poll,3500);I.focus()})();</script>', "/chat", u)
+
+    def chat_post(self, u, p, parts, f):
+        me = u["id"]; go = lambda k="", to="/chat": self.go(to + (f"?ok={k}" if k else ""))
+        if p == "/chat/friend/add":
+            ip = "fr" + str(me); n, t0 = self.fails.get(ip, (0, 0))
+            if n >= 20 and time.time() - t0 < 3600: return go("limit")
+            self.fails[ip] = (n + 1 if time.time() - t0 < 3600 else 1, time.time())
+            q = f.get("q", "").strip()[:120]; t = one("select * from users where (lower(username)=lower(?) or lower(email)=lower(?)) and disabled=0", (q, q)) if q else None
+            if not t: return go("nouser")
+            if t["id"] == me: return go("self")
+            ex = one("select * from friends where (a=? and b=?) or (a=? and b=?)", (me, t["id"], t["id"], me))
+            if ex:
+                if ex["status"] == "ok": return go("already")
+                if ex["a"] == me: return go("pend")
+                run("update friends set status='ok' where id=?", (ex["id"],)); dm_chat(me, t["id"]); return go("accepted")
+            run("insert into friends(a,b,status,created) values(?,?,'pending',?)", (me, t["id"], now_str())); return go("sent")
+        if len(parts) == 4 and parts[1] == "friend" and parts[3].isdigit():
+            r = one("select * from friends where id=? and (a=? or b=?)", (parts[3], me, me))
+            if not r: return go()
+            if parts[2] == "accept" and r["b"] == me and r["status"] == "pending":
+                run("update friends set status='ok' where id=?", (r["id"],)); dm_chat(r["a"], r["b"]); return go("accepted")
+            if parts[2] == "remove":
+                run("delete from friends where id=?", (r["id"],))
+                if r["status"] == "ok": run("delete from chats where kind='dm' and id=?", (dm_chat(r["a"], r["b"]),))
+                return go("fgone" if r["status"] == "ok" else "reqgone")
+            return go()
+        if len(parts) == 3 and parts[1] == "dm" and parts[2].isdigit():
+            if not any(x["id"] == int(parts[2]) for x in friends_of(me)): return go()
+            return self.go(f"/chat/{dm_chat(me, int(parts[2]))}")
+        if p == "/chat/group/new":
+            name = f.get("name", "").strip()[:40]
+            if not name: return go("noname")
+            fids = {x["id"] for x in friends_of(me)}; sel = [int(x) for x in self.fl.get("m", []) if x.isdigit() and int(x) in fids][:49]
+            cid = run("insert into chats(kind,name,owner,created) values('group',?,?,?)", (name, me, now_str()))
+            for x in [me] + sel: run("insert into chat_members(chat_id,user_id) values(?,?)", (cid, x))
+            return self.go(f"/chat/{cid}?ok=gnew")
+        if len(parts) >= 3 and parts[1].isdigit():
+            cid = int(parts[1]); c = one("select * from chats where id=?", (cid,)); act = parts[2]
+            if not c or not chat_member(cid, me): raise ValueError
+            room = f"/chat/{cid}"
+            if act == "send":
+                ip = "c" + str(me); n, t0 = self.fails.get(ip, (0, 0)); body = f.get("body", "").strip()[:1000]
+                self.fails[ip] = (n + 1 if time.time() - t0 < 60 else 1, time.time())
+                if body and not (n >= 40 and time.time() - t0 < 60):
+                    mid = run("insert into chat_msgs(chat_id,user_id,body,created) values(?,?,?,?)", (cid, me, body, now_str()))
+                    run("update chat_members set last_read=? where chat_id=? and user_id=?", (mid, cid, me))
+                return self.out("ok", 200, "text/plain") if f.get("ajax") else self.go(room)
+            if c["kind"] != "group": return self.go(room)
+            if act == "leave":
+                run("delete from chat_members where chat_id=? and user_id=?", (cid, me))
+                nx = one("select user_id from chat_members where chat_id=? order by rowid limit 1", (cid,))
+                if not nx: run("delete from chats where id=?", (cid,))
+                elif c["owner"] == me: run("update chats set owner=? where id=?", (nx["user_id"], cid))
+                return go("left")
+            if c["owner"] != me: return self.go(room)
+            if act == "delete": run("delete from chats where id=?", (cid,)); return go("gdel")
+            if act == "add" and f.get("uid", "").isdigit() and int(f["uid"]) in {x["id"] for x in friends_of(me)}:
+                run("insert or ignore into chat_members(chat_id,user_id) values(?,?)", (cid, int(f["uid"]))); return self.go(room + "?ok=madd")
+            if act == "kick" and len(parts) == 4 and parts[3].isdigit() and int(parts[3]) != me:
+                run("delete from chat_members where chat_id=? and user_id=?", (cid, int(parts[3]))); return self.go(room + "?ok=kick")
+            return self.go(room)
+        self.go("/chat")
 
     # ---- sobre e suporte (público)
     def about(self, u):
