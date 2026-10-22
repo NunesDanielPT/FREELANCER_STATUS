@@ -18,6 +18,9 @@
     ws.onerror = function () {};
   }
   connect();
+  if (navigator.serviceWorker) navigator.serviceWorker.register("/sw.js").catch(function () {});
+  var dip = null; window.addEventListener("beforeinstallprompt", function (e) { e.preventDefault(); dip = e; var b = $("#pwab"); if (b) b.hidden = false; });
+  var pb = $("#pwab"); if (pb) pb.onclick = function () { if (dip) { dip.prompt(); dip = null; pb.hidden = true; } };
   window.CLQ = { on: on, up: function () { return up; }, send: function (o) { if (up) ws.send(JSON.stringify(o)); } };
 
   /* ---------- contadores */

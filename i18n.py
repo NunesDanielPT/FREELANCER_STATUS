@@ -539,6 +539,15 @@ P += [
     ("Emojis", "Emojis", "Emojis", "Émojis", "Emoji"),
     ("Enviar imagem (apagada ao fim de 5 dias)", "Send image (deleted after 5 days)", "Enviar imagen (se borra a los 5 días)", "Envoyer une image (supprimée après 5 jours)", "Invia immagine (eliminata dopo 5 giorni)"),
 ]
+P += [
+    ("Instalar como aplicação", "Install as an app", "Instalar como aplicación", "Installer comme application", "Installa come app"),
+    ("Usa o site como uma app no telemóvel: ícone no ecrã principal, ecrã inteiro e avisos.", "Use the site as a phone app: home-screen icon, full screen and alerts.", "Usa el sitio como una app en el móvil: icono en la pantalla de inicio, pantalla completa y avisos.", "Utilisez le site comme une appli sur votre téléphone : icône sur l’écran d’accueil, plein écran et alertes.", "Usa il sito come app sul telefono: icona nella home, schermo intero e avvisi."),
+    ("Instalar app", "Install app", "Instalar app", "Installer l’appli", "Installa app"),
+    ("Android (Chrome):", "Android (Chrome):", "Android (Chrome):", "Android (Chrome) :", "Android (Chrome):"),
+    ("menu ⋮ → «Instalar app» ou «Adicionar ao ecrã principal».", "menu ⋮ → “Install app” or “Add to Home screen”.", "menú ⋮ → «Instalar app» o «Añadir a la pantalla de inicio».", "menu ⋮ → « Installer l’appli » ou « Ajouter à l’écran d’accueil ».", "menu ⋮ → «Installa app» o «Aggiungi a schermata Home»."),
+    ("iPhone/iPad (Safari):", "iPhone/iPad (Safari):", "iPhone/iPad (Safari):", "iPhone/iPad (Safari) :", "iPhone/iPad (Safari):"),
+    ("botão Partilhar → «Adicionar ao ecrã principal».", "Share button → “Add to Home Screen”.", "botón Compartir → «Añadir a pantalla de inicio».", "bouton Partager → « Sur l’écran d’accueil ».", "pulsante Condividi → «Aggiungi alla schermata Home»."),
+]
 # --- e-mails (pt, en, es, fr, it) com {marcadores}
 MAIL = {
     "welcome_s": ("Bem-vindo à {site}", "Welcome to {site}", "Bienvenido a {site}", "Bienvenue sur {site}", "Benvenuto su {site}"),

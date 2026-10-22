@@ -16,6 +16,16 @@ try:
     with open(os.path.join(HERE, "app.js"), encoding="utf-8") as _f: JS = _f.read()
 except OSError: JS = ""
 JSV = hashlib.md5(JS.encode()).hexdigest()[:8]
+SW = """/* Claquete: service worker minimo. Nao guarda dados privados; so mostra um aviso se estiveres sem rede. */
+self.addEventListener("install", function () { self.skipWaiting(); });
+self.addEventListener("activate", function (e) { e.waitUntil(self.clients.claim()); });
+self.addEventListener("fetch", function (e) {
+  if (e.request.mode !== "navigate") return;
+  e.respondWith(fetch(e.request).catch(function () {
+    return new Response('<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><body style="font-family:system-ui;display:grid;place-items:center;height:100vh;margin:0;text-align:center"><div><h2>Sem ligação</h2><p>Volta a tentar quando tiveres rede.</p></div>', { headers: { "Content-Type": "text/html; charset=utf-8" } });
+  }));
+});
+"""
 DB = os.environ.get("DB_PATH", "/data/claquete.db")
 BASE_URL = os.environ.get("BASE_URL", "").rstrip("/")
 INVITE = os.environ.get("INVITE_CODE", "")
@@ -456,8 +466,8 @@ def foot(n=0):
             f'<div class="m">Feito por Daniel Nunes · Made in Portugal {FLAG}</div></footer>')
 
 def head(t, c):
-    return ('<!doctype html><html lang="' + i18n.lang() + '"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="'
-            + c["c_brand"] + '"><title>' + t + '</title>' + fav(c) + '<style>' + CSS + theme_css(c) + '</style></head><body>')
+    return ('<!doctype html><html lang="' + i18n.lang() + '"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="'
+            + c["c_brand"] + '"><link rel="manifest" href="/manifest.webmanifest"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="' + html.escape(SN()) + '"><meta name="apple-mobile-web-app-status-bar-style" content="default"><title>' + t + '</title>' + fav(c) + '<style>' + CSS + theme_css(c) + '</style></head><body>')
 
 def page(title, body, active, u):
     c = cfg(); sn = e(c["site_name"]); lg = logo(c)
@@ -699,7 +709,9 @@ class H(BaseHTTPRequestHandler):
             return self.go(nx, [("Set-Cookie", ck)] if g("l") in i18n.LANGS else [])
         if p == "/app.js": return self.out(JS.encode(), 200, "application/javascript; charset=utf-8", (("Cache-Control", "public, max-age=3600"),))
         if p == "/calendar.ics": return self.ics(g("k"))
-        if p in ("/favicon.svg", "/favicon.ico", "/favicon-32.png", "/apple-touch-icon.png"): return self.icon(p)
+        if p in ("/favicon.svg", "/favicon.ico", "/favicon-32.png", "/apple-touch-icon.png", "/icon-192.png", "/icon-512.png"): return self.icon(p)
+        if p == "/manifest.webmanifest": return self.manifest()
+        if p == "/sw.js": return self.out(SW.encode(), 200, "application/javascript; charset=utf-8", (("Cache-Control", "no-cache"), ("Service-Worker-Allowed", "/")))
         u = self.user()
         if p in ("/login", "/register", "/forgot", "/reset"):
             if u: return self.go("/")
@@ -855,8 +867,15 @@ class H(BaseHTTPRequestHandler):
     def icon(self, p):
         c = cfg(); hd = (("Cache-Control", "public, max-age=86400"),)
         if p == "/favicon.svg": return self.out(logo(c, True), 200, "image/svg+xml", hd)
-        size = {"/favicon.ico": 48, "/favicon-32.png": 32, "/apple-touch-icon.png": 180}[p]
+        size = {"/favicon.ico": 48, "/favicon-32.png": 32, "/apple-touch-icon.png": 180, "/icon-192.png": 192, "/icon-512.png": 512}[p]
         self.out(png_icon(size, tuple(c[k] for k in COLOR_KEYS)), 200, "image/png", hd)
+
+    def manifest(self):
+        c = cfg(); v = hashlib.sha256("".join(c[k] for k in COLOR_KEYS).encode()).hexdigest()[:6]
+        m = {"name": SN(), "short_name": SN()[:12], "description": "Eventos, clientes e faturação para freelancers.", "start_url": "/", "scope": "/", "display": "standalone",
+             "background_color": "#ffffff", "theme_color": c["c_brand"], "lang": i18n.lang(),
+             "icons": [{"src": f"/icon-192.png?v={v}", "sizes": "192x192", "type": "image/png", "purpose": "any"}, {"src": f"/icon-512.png?v={v}", "sizes": "512x512", "type": "image/png", "purpose": "any"}]}
+        self.out(json.dumps(m, ensure_ascii=False), 200, "application/manifest+json", (("Cache-Control", "public, max-age=3600"),))
 
     # ---- admin
     TABS = [("/admin", "Resumo"), ("/admin/users", "Utilizadores"), ("/admin/site", "Site"), ("/admin/ads", "Publicidade"), ("/admin/news", "Novidades"), ("/admin/support", "Suporte"), ("/admin/db", "Base de dados")]
@@ -1640,6 +1659,9 @@ class H(BaseHTTPRequestHandler):
         return page("Conta", f'<h1>Conta</h1><p class="sub">Os teus dados e a tua segurança.</p>{m}<form class="f card" method="post" action="/settings/profile"><h2>Dados pessoais</h2>'
             + fld("Nome", "name", val=u["name"], extra="required") + fld("Email", "email", "email", u["email"], "required") + fld("Telemóvel", "phone", "tel", u["phone"] or "")
             + f'<p class="m">Utilizador: <b>{e(u["username"])}</b></p><p><button class="p">Guardar dados</button></p></form>'
+            '<div class="card" id="pwa"><h2>Instalar como aplicação</h2><p class="m">Usa o site como uma app no telemóvel: ícone no ecrã principal, ecrã inteiro e avisos.</p>'
+            '<p><button type="button" class="p" id="pwab" hidden>Instalar app</button></p>'
+            '<p class="m"><b>Android (Chrome):</b> menu ⋮ → «Instalar app» ou «Adicionar ao ecrã principal».<br><b>iPhone/iPad (Safari):</b> botão Partilhar → «Adicionar ao ecrã principal».</p></div>'
             f'<div class="card"><h2>Foto de perfil</h2><div class="avset">{uav(u)}<div><form id="avf" method="post" action="/settings/avatar"><input type="file" id="avfile" accept="image/*"><input type="hidden" name="img" id="avdata">'
             '<p style="margin:10px 0 0"><img id="avpv" class="av u" alt="" hidden> <button class="p" id="avsave" hidden>Guardar</button></p></form>'
             + (f'<form method="post" action="/settings/avatar/remove" style="margin-top:8px"><button>Remover foto</button></form>' if u["av_v"] else "") + '</div></div>'
