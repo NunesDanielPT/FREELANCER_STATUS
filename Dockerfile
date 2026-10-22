@@ -1,7 +1,7 @@
 FROM python:3.12-alpine
 ENV PYTHONUNBUFFERED=1 DB_PATH=/data/claquete.db
 WORKDIR /app
-COPY *.py .
+COPY *.py *.js ./
 RUN adduser -D -u 1000 app && mkdir /data && chown app /data
 USER app
 EXPOSE 8000

@@ -36,8 +36,20 @@ As traduções estão em `i18n.py`: para corrigir uma frase edita a linha respet
 - As mensagens chegam a **Admin > Suporte** (com contador de novas). Respondes lá; a resposta aparece na conversa do utilizador (ou no link da conversa, para visitantes) e é enviada por email se o SMTP estiver configurado. Também recebes um email de cada mensagem nova.
 - Página **Sobre** (`/about`) explica para que serve o site e quem o fez.
 
-## Chat
-Aba **Chat**: adiciona amigos pelo utilizador ou email (a outra pessoa tem de aceitar), troca mensagens privadas com os amigos e cria grupos só com amigos (o dono do grupo adiciona/remove membros). Só quem é amigo pode falar contigo; os administradores não leem as conversas. As mensagens novas aparecem sozinhas (atualiza a cada poucos segundos) e há um contador de não lidas no menu.
+## Chat em tempo real
+
+- Servidor WebSocket próprio (sem dependências) no mesmo porto: mensagens instantâneas, "online / visto por último", "a escrever…", ✓ enviado / ✓✓ lido e contadores de não lidas.
+- Interface tipo WhatsApp/Telegram: lista com separadores **Conversas · Contactos · Grupos**, pesquisa, ponto verde de presença e mensagens não lidas.
+- Se o WebSocket falhar, o chat continua a funcionar por polling.
+- **Reverse proxy:** tem de deixar passar WebSockets. No Nginx Proxy Manager, ativa **"Websockets Support"** no Proxy Host. Em Nginx puro: `proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade"; proxy_read_timeout 3600s;`.
+
+## Novidades (admin → todos)
+
+No Admin → **Novidades**, escreve um título e uma mensagem (ex.: "UPDATE 3.0"), com traduções opcionais. Todos os utilizadores recebem um aviso instantâneo, um contador no sino e a lista em **Novidades**. Vês quantos já leram.
+
+## Foto de perfil
+
+Em Definições → Foto de perfil. A imagem é reduzida no browser (256×256) e guardada em base64 na base de dados (sem ficheiros).
 
 ## Admin
 A primeira conta registada é administradora. Ícone **Admin** no menu: resumo e avisos, contas (editar email, repor password, suspender, apagar), mensagens de suporte, apagar contas (também várias de uma vez), promover administradores pesquisando por utilizador ou email, nome/cores/textos do site, publicidade, backups (automático diário em `/data/backups`), restauro e consola SQL.
