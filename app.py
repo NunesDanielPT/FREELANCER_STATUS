@@ -8,7 +8,7 @@ from email.utils import formataddr
 from http import cookies
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs, quote
-import i18n, ws, guide, guide_art, export
+import i18n, ws, guide, guide_art, export, people
 import threading as _th
 THR = _th.local()
 from i18n import tx, M0, M1
@@ -121,6 +121,8 @@ def migrate(c):
     ec = {r[1] for r in c.execute("pragma table_info(events)")}
     for name, ddl in (("vat_mode", "text default 'none'"), ("vat_rate", "real default 0"), ("wh_rate", "real default 0")):
         if ec and name not in ec: c.execute(f"alter table events add column {name} {ddl}")
+    fc = {r[1] for r in c.execute("pragma table_info(friends)")}
+    if fc and "intro" not in fc: c.execute("alter table friends add column intro text")
     mc = {r[1] for r in c.execute("pragma table_info(chat_msgs)")}
     if mc and "img" not in mc: c.execute("alter table chat_msgs add column img integer default 0")
     for name, ddl in (("is_admin", "integer default 0"), ("disabled", "integer default 0"), ("last_seen", "text"), ("av_v", "integer default 0"), ("guide_seen", "integer default 0"), ("theme", "text default 'auto'"), ("vat_country", "text default 'PT'"), ("vat_def", "text default 'none'"), ("wh_def", "real default 0"), ("ss_on", "integer default 0"), ("ss_rate", "real default 21.4"), ("ss_coef", "real default 70")):
@@ -273,6 +275,9 @@ def init():
     create table if not exists kv(k text primary key, v text);
     create table if not exists tickets(id integer primary key, token text unique, user_id integer, name text, email text, subject text, status text default 'open',
       lang text, created text, updated text, unread_admin integer default 1, unread_user integer default 0);
+    create table if not exists pro(user_id integer primary key, visible integer default 0, headline text, city text, travel text default 'no', roles text, roles_other text,
+      software text, gear text, career text, companies text, projects text, updated text);
+    create table if not exists contact_req(id integer primary key, a integer not null, b integer not null, status text default 'pending', s_email integer default 0, s_phone integer default 0, created text, unique(a, b));
     create table if not exists friends(id integer primary key, a integer not null, b integer not null, status text default 'pending', created text, unique(a, b));
     create table if not exists chats(id integer primary key, kind text, name text, owner integer, created text);
     create table if not exists chat_members(chat_id integer references chats(id) on delete cascade, user_id integer, last_read integer default 0, primary key(chat_id, user_id));
@@ -404,6 +409,7 @@ def darkify(css):
         out.append("@media(prefers-color-scheme:dark){" + "".join(auto) + "}" + "".join(forced)); i = m
     return "".join(out)
 
+CSS += people.CSS
 CSS = darkify(CSS)
 
 CSS += """
@@ -478,8 +484,9 @@ IC = {"home": '<path d="M3 11l9-8 9 8v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z
       "users": '<circle cx="12" cy="8" r="4"/><path d="M4 21c1-4 4-6 8-6s7 2 8 6"/>',
       "chart": '<path d="M5 20V11M12 20V4M19 20v-6"/>',
       "gear": '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9L7 7M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"/>'}
-NAV = [("/", "Início", "home"), ("/calendar", "Calendário", "cal"), ("/events", "Eventos", "list"), ("/clients", "Clientes", "users"), ("/chat", "Chat", "chat"), ("/stats", "Estatísticas", "chart")]
+NAV = [("/", "Início", "home"), ("/calendar", "Calendário", "cal"), ("/events", "Eventos", "list"), ("/clients", "Clientes", "users"), ("/chat", "Chat", "chat"), ("/people", "AV Freelancers", "net"), ("/stats", "Estatísticas", "chart")]
 IC["shield"] = '<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M9 12l2 2 4-4"/>'
+IC["net"] = '<circle cx="12" cy="5" r="2.5"/><circle cx="5" cy="18" r="2.5"/><circle cx="19" cy="18" r="2.5"/><path d="M12 7.5v4M12 11.5l-5.5 4.5M12 11.5l5.5 4.5"/>'
 IC["chat"] = '<path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/>'
 FLAG = ('<svg class="flag" viewBox="0 0 30 20" role="img" aria-label="Portugal"><rect width="30" height="20" fill="#d4202c"/><rect width="12" height="20" fill="#046a38"/>'
         '<circle cx="12" cy="10" r="4" fill="#ffd400" stroke="#fff" stroke-width=".7"/></svg>')
@@ -503,8 +510,10 @@ def head(t, c):
 def page(title, body, active, u):
     c = cfg(); sn = e(c["site_name"]); lg = logo(c)
     cb = chat_badge(u["id"]); nn = notif_unread(u)
+    pq = one("select count(*) from contact_req where b=? and status='pending'", (u["id"],))[0]
+    pnb = f'<i class="nb" data-k="people"{"" if pq else " hidden"}>{pq}</i>'
     chatnb = f'<i class="nb" data-k="chat"{"" if cb else " hidden"}>{cb}</i>'
-    nav = "".join(f'<a class="nl{" on" if h == active else ""}" href="{h}"><svg viewBox="0 0 24 24">{IC[i]}</svg><span>{n}</span>{chatnb if h == "/chat" else ""}</a>' for h, n, i in NAV)
+    nav = "".join(f'<a class="nl{" on" if h == active else ""}" href="{h}"><svg viewBox="0 0 24 24">{IC[i]}</svg>{'<span><b class="lg">' + n + '</b><b class="sm">Rede</b></span>' if h == "/people" else '<span>' + n + '</span>'}{chatnb if h == "/chat" else pnb if h == "/people" else ""}</a>' for h, n, i in NAV)
     nbn = f'<i class="nb" data-k="notif"{"" if nn else " hidden"}>{nn}</i>'
     adm = f'<a class="nl acct{" on" if active == "/admin" else ""}" href="/admin"><svg viewBox="0 0 24 24">{IC["shield"]}</svg><span>Admin</span></a>' if u["is_admin"] else ""
     madm = '<a class="btn" style="padding:4px 12px" href="/admin">Admin</a>' if u["is_admin"] else ""
@@ -662,10 +671,10 @@ def chat_panels(u, cur=0):
     groups = "".join(item(c, pl(nmem.get(c["id"], 1), "membro")) for c in sorted((c for c in cs if c["kind"] == "group"), key=lambda c: c["name"].lower()))
     groups = '<div style="padding:10px 12px"><a class="btn p" href="/chat/new" style="width:100%;text-align:center">Novo grupo</a></div>' + (groups or '<div class="empty">Ainda não tens grupos.</div>')
     fr = friends_of(me); fr.sort(key=lambda r: (not is_online(r["id"]), uname(r).lower()))
-    pin = rows("select f.id fid, u.* from friends f join users u on u.id=f.a where f.b=? and f.status='pending' order by f.id", (me,))
+    pin = rows("select f.id fid, f.intro intro, u.* from friends f join users u on u.id=f.a where f.b=? and f.status='pending' order by f.id", (me,))
     pout = rows("select f.id fid, u.* from friends f join users u on u.id=f.b where f.a=? and f.status='pending' order by f.id", (me,))
     btn = lambda url, label, cls="": f'<form method="post" action="{url}"><button class="{cls}">{label}</button></form>'
-    rq = lambda r, acts: f'<div class="rq"><span class="avw">{uav(r)}</span><span class="ct"><b>{e(uname(r))}</b><small>@{e(r["username"])}</small></span>{acts}</div>'
+    rq = lambda r, acts: f'<div class="rq"><span class="avw">{uav(r)}</span><span class="ct"><b>{e(uname(r))}</b><small>@{e(r["username"])}</small>{"<small>" + e(r["intro"]) + "</small>" if "intro" in r.keys() and r["intro"] else ""}</span>{acts}</div>'
     cont = ('<form class="ca" method="post" action="/chat/friend/add"><input name="q" maxlength="120" required autocomplete="off" placeholder="Utilizador ou email do teu amigo"><button class="p">Adicionar</button></form>')
     if pin: cont += '<div class="sh">Pedidos de amizade</div>' + "".join(rq(r, btn("/chat/friend/accept/" + str(r["fid"]), "Aceitar", "p") + btn("/chat/friend/remove/" + str(r["fid"]), "Recusar")) for r in pin)
     cont += "".join(f'<form method="post" action="/chat/dm/{r["id"]}"><button class="ci" data-q="{e((uname(r) + " " + r["username"]).lower())}"><span class="avw">{uav(r)}'
@@ -676,6 +685,11 @@ def chat_panels(u, cur=0):
 
 def friends_of(uid):
     return rows("select u.* from friends f join users u on u.id = case when f.a=? then f.b else f.a end where f.status='ok' and (f.a=? or f.b=?) and u.disabled=0 order by lower(coalesce(nullif(u.name,''),u.username))", (uid, uid, uid))
+
+def accept_friend(r):
+    run("update friends set status='ok' where id=?", (r["id"],)); cid = dm_chat(r["a"], r["b"])
+    if r["intro"]: run("insert into chat_msgs(chat_id,user_id,body,created) values(?,?,?,?)", (cid, r["a"], r["intro"], now_str()))
+    push_sync(r["a"], r["b"])
 
 def chat_member(cid, uid): return one("select * from chat_members where chat_id=? and user_id=?", (cid, uid))
 
@@ -692,7 +706,7 @@ def chat_badge(uid):
 
 def purge_user(tid):
     run("delete from events where user_id=?", (tid,)); run("delete from clients where user_id=?", (tid,)); run("delete from tickets where user_id=?", (tid,))
-    run("delete from friends where a=? or b=?", (tid, tid))
+    run("delete from friends where a=? or b=?", (tid, tid)); run("delete from pro where user_id=?", (tid,)); run("delete from contact_req where a=? or b=?", (tid, tid))
     run("delete from chats where kind='dm' and id in (select chat_id from chat_members where user_id=?)", (tid,))
     run("delete from chat_msgs where user_id=?", (tid,))
     run("update chats set owner=(select user_id from chat_members where chat_id=chats.id and user_id!=? limit 1) where owner=?", (tid, tid))
@@ -788,6 +802,9 @@ class H(BaseHTTPRequestHandler):
             if u: return self.go("/")
             return self.out({"/login": lambda: self.login_page(ok=g("ok")), "/register": self.register_page, "/forgot": self.forgot_page, "/reset": lambda: self.reset_page(g("t"))}[p]())
         if p == "/ws": return self.websocket(u)
+        if p.startswith("/people") and u:
+            try: return self.out(self.people_get(u, p, g))
+            except (ValueError, KeyError, IndexError): return self.go("/people")
         if p == "/export" and u: return self.out(self.export_page(u, g))
         if p == "/export/run" and u: return self.export_run(u, g)
         if p == "/guide" or p.startswith("/guide/"):
@@ -837,6 +854,7 @@ class H(BaseHTTPRequestHandler):
         if parts[0] == "chat":
             try: return self.chat_post(u, p, parts, f)
             except (ValueError, KeyError, IndexError): return self.go("/chat")
+        if parts[0] == "people": return self.people_post(u, p, f)
         i = u["id"]; nxt = f.get("next", "/"); nxt = nxt if nxt.startswith("/") and not nxt.startswith("//") else "/"
         if parts[0] == "toggle" and len(parts) == 3:
             r = one("select * from events where id=? and user_id=?", (parts[1], i)); t = today().isoformat()
@@ -1610,14 +1628,14 @@ class H(BaseHTTPRequestHandler):
             if ex:
                 if ex["status"] == "ok": return go("already", "/chat?t=f")
                 if ex["a"] == me: return go("pend", "/chat?t=f")
-                run("update friends set status='ok' where id=?", (ex["id"],)); dm_chat(me, t["id"]); push_sync(me, t["id"]); return go("accepted", "/chat?t=f")
+                accept_friend(ex); return go("accepted", "/chat?t=f")
             run("insert into friends(a,b,status,created) values(?,?,'pending',?)", (me, t["id"], now_str())); push_sync(t["id"]); return go("sent", "/chat?t=f")
         if len(parts) == 4 and parts[1] == "friend" and parts[3].isdigit():
             r = one("select * from friends where id=? and (a=? or b=?)", (parts[3], me, me))
             if not r: return go()
             other = r["a"] if r["b"] == me else r["b"]
             if parts[2] == "accept" and r["b"] == me and r["status"] == "pending":
-                run("update friends set status='ok' where id=?", (r["id"],)); dm_chat(r["a"], r["b"]); push_sync(me, other); return go("accepted", "/chat?t=f")
+                accept_friend(r); return go("accepted", "/chat?t=f")
             if parts[2] == "remove":
                 run("delete from friends where id=?", (r["id"],))
                 if r["status"] == "ok": run("delete from chats where kind='dm' and id=?", (dm_chat(r["a"], r["b"]),))
@@ -1796,6 +1814,160 @@ class H(BaseHTTPRequestHandler):
             f'<div class="row2">{btn("close", "Reabrir conversa" if t["status"] == "closed" else "Fechar conversa")}{btn("delete", "Apagar conversa", "d")}</div>'), ok, err)
 
     # ---- definições
+    # ---- rede de freelancers AV
+    def pro_of(self, uid): return one("select * from pro where user_id=?", (uid,))
+
+    def chips(self, items, cls=""): return '<div class="tgs">' + "".join(f'<span class="{cls}">{e(x)}</span>' for x in items) + '</div>' if items else ""
+
+    def role_names(self, p):
+        li = ("pt", "en", "es", "fr", "it").index(i18n.lang()) if i18n.lang() in ("pt", "en", "es", "fr", "it") else 0
+        return [people.ROLES[k][1][li] for k in (p["roles"] or "").split(",") if k in people.ROLES]
+
+    def people_get(self, u, p, g):
+        me = u["id"]; pro = self.pro_of(me)
+        msg = {"saved": "Perfil guardado.", "sent": "Pedido enviado.", "asked": "Pedido de contacto enviado.", "answered": "Resposta guardada.", "limit": "Tentaste muitas vezes. Volta a tentar mais tarde.",
+               "pend": "Já enviaste um pedido a esta pessoa.", "none": "Escolhe pelo menos o que queres partilhar (email ou telemóvel).", "gone": "Feito."}.get(g("ok"))
+        flash = f'<p class="msg ok">{msg}</p>' if msg else ""
+        if p == "/people/me":
+            pro = pro or {k: "" for k in ("headline", "city", "roles", "roles_other", "software", "gear", "career", "companies", "projects")} | {"visible": 0, "travel": "no"}
+            sel = set((pro["roles"] or "").split(","))
+            rg = "".join('<div class="rg"><h3>' + eh(gp[0][0]) + '</h3><div class="ck">' + "".join(
+                f'<label class="c"><input type="checkbox" name="role" value="{r[0]}"{" checked" if r[0] in sel else ""}>{eh(r[1])}</label>' for r in gp[1]) + '</div></div>' for gp in people.GROUPS)
+            sug = lambda tid, items: '<div class="sg">' + "".join(f'<button type="button" data-t="{tid}" data-v="{e(x)}">{e(x)}</button>' for x in items) + '</div>'
+            tv = "".join(f'<option value="{t[0]}"{" selected" if (pro["travel"] or "no") == t[0] else ""}>{eh(t[1])}</option>' for t in people.TRAVEL)
+            body = (f'<p><a class="back" href="/people">‹ AV Freelancers</a></p><h1>O meu perfil profissional</h1>{flash}'
+                    '<form class="f" method="post" action="/people/me">'
+                    f'<div class="card"><label class="c"><input type="checkbox" name="visible"{" checked" if pro["visible"] else ""}><b>Tornar o meu perfil visível a outros freelancers</b></label>'
+                    '<p class="m">Se estiver desligado, ninguém te encontra na pesquisa. O teu email e telemóvel nunca aparecem: só os partilhas com quem tu autorizares.</p></div>'
+                    '<div class="card"><h2>Quem sou</h2>' + fld("Título (ex.: Técnico de luz e operador de grandMA3)", "headline", val=pro["headline"], extra='maxlength="100"')
+                    + fld("Cidade ou zona onde trabalhas", "city", val=pro["city"], extra='maxlength="80"') + f'<label>Disponibilidade para viajar</label><select name="travel">{tv}</select></div>'
+                    f'<div class="card"><h2>Funções</h2>{rg}' + fld("Outras funções (separadas por vírgula)", "roles_other", val=pro["roles_other"], extra='maxlength="200"') + '</div>'
+                    '<div class="card"><h2>Software e equipamento</h2>' + fld("Software que dominas (separado por vírgula)", "software", val=pro["software"], extra='id="f_software" maxlength="400"') + sug("f_software", people.SOFT)
+                    + fld("Equipamento que operas (separado por vírgula)", "gear", val=pro["gear"], extra='id="f_gear" maxlength="400"') + sug("f_gear", people.GEAR) + '</div>'
+                    '<div class="card"><h2>Carreira</h2><label>A tua história profissional</label><textarea name="career" rows="6" maxlength="2000">' + e(pro["career"]) + '</textarea>'
+                    '<label>Empresas para as quais costumas trabalhar</label><textarea name="companies" rows="3" maxlength="800">' + e(pro["companies"]) + '</textarea>'
+                    '<label>Projetos e eventos em que participaste</label><textarea name="projects" rows="4" maxlength="1500">' + e(pro["projects"]) + '</textarea></div>'
+                    '<p><button class="p">Guardar perfil</button></p></form>'
+                    '<script nonce="__NONCE__">document.querySelectorAll(".sg button").forEach(function(b){b.onclick=function(){var i=document.getElementById(b.dataset.t),v=b.dataset.v,a=i.value.split(",").map(function(x){return x.trim()}).filter(Boolean);if(a.indexOf(v)<0)a.push(v);i.value=a.join(", ")}})</script>')
+            return page("O meu perfil profissional", body, "/people", u)
+        if p == "/people/requests":
+            inc = rows("select c.id cid, c.status, c.s_email, c.s_phone, u.* from contact_req c join users u on u.id=c.a where c.b=? order by c.id desc", (me,))
+            out_ = rows("select c.id cid, c.status, u.* from contact_req c join users u on u.id=c.b where c.a=? order by c.id desc", (me,))
+            btn = lambda url, cid, label, cls="": f'<form method="post" action="{url}"><input type="hidden" name="id" value="{cid}"><button class="{cls}">{label}</button></form>'
+            pend = ""
+            for r in inc:
+                who = f'<a href="/people/p?id={r["id"]}"><b>{e(uname(r))}</b></a> <span class="m">@{e(r["username"])}</span>'
+                if r["status"] == "pending":
+                    pend += (f'<form class="f card" method="post" action="/people/answer"><input type="hidden" name="id" value="{r["cid"]}"><p>{who} {eh("quer o teu contacto.")}</p>'
+                             '<label class="c"><input type="checkbox" name="s_email" checked>Partilhar o meu email</label>'
+                             + ('<label class="c"><input type="checkbox" name="s_phone">Partilhar o meu telemóvel</label>' if u["phone"] else "")
+                             + '<p><button class="p" name="act" value="ok">Autorizar</button> <button name="act" value="no">Recusar</button></p></form>')
+            ok_ = "".join(f'<div class="card"><p>{"<a href=" + chr(34) + "/people/p?id=" + str(r["id"]) + chr(34) + "><b>" + e(uname(r)) + "</b></a>"} · {eh("partilhas")}: {eh("email") if r["s_email"] else ""} {eh("telemóvel") if r["s_phone"] else ""}</p>'
+                          + btn("/people/revoke", r["cid"], "Retirar autorização") + '</div>' for r in inc if r["status"] == "ok")
+            mine = "".join(f'<div class="card"><p><a href="/people/p?id={r["id"]}"><b>{e(uname(r))}</b></a> · {eh({"pending": "à espera de resposta", "ok": "autorizado", "no": "recusado"}[r["status"]])}</p>'
+                           + (btn("/people/revoke", r["cid"], "Cancelar pedido") if r["status"] == "pending" else "") + '</div>' for r in out_)
+            body = (f'<p><a class="back" href="/people">‹ AV Freelancers</a></p><h1>Pedidos de contacto</h1>{flash}<p class="sub">Só partilhas o teu email ou telemóvel com quem tu autorizares.</p>'
+                    + (pend or '<p class="m">Não tens pedidos pendentes.</p>') + ('<h2>Autorizados por ti</h2>' + ok_ if ok_ else "") + ('<h2>Pedidos que fizeste</h2>' + mine if mine else ""))
+            return page("Pedidos de contacto", body, "/people", u)
+        if p == "/people/p":
+            t = one("select * from users where id=? and disabled=0", (g("id") or 0,)); pr = self.pro_of(t["id"]) if t else None
+            if not t or not pr or (not pr["visible"] and t["id"] != me): return page("AV Freelancers", '<p class="m">Este perfil não está disponível.</p><p><a class="btn" href="/people">‹ AV Freelancers</a></p>', "/people", u)
+            roles = self.role_names(pr) + people.csv(pr["roles_other"], 10)
+            sec = lambda title, txt: f'<div class="card"><h2>{title}</h2><p class="pv">{e(txt)}</p></div>' if (txt or "").strip() else ""
+            tvl = eh(people.TRAVEL_D.get(pr["travel"] or "no", "Só na minha zona"))
+            top = (f'<p><a class="back" href="/people">‹ AV Freelancers</a></p><div class="pp">{uav(t)}<div><h1>{e(uname(t))}</h1><div class="m">{e(pr["headline"] or "")}</div>'
+                   f'<div class="m">{"📍 " + e(pr["city"]) + " · " if pr["city"] else ""}✈ {tvl}</div></div></div>')
+            act = ""
+            if t["id"] == me:
+                act = '<p><a class="btn p" href="/people/me">Editar o meu perfil</a>' + ("" if pr["visible"] else ' <span class="m">· Não estás visível na pesquisa.</span>') + '</p>'
+            else:
+                fr = one("select * from friends where (a=? and b=?) or (a=? and b=?)", (me, t["id"], t["id"], me))
+                if fr and fr["status"] == "ok": act = f'<form method="post" action="/people/msg"><input type="hidden" name="id" value="{t["id"]}"><button class="p">Abrir conversa</button></form>'
+                elif fr and fr["a"] == me: act = '<p class="m">Mensagem enviada. Aguarda que a pessoa aceite.</p>'
+                else: act = (f'<form class="f" method="post" action="/people/msg"><input type="hidden" name="id" value="{t["id"]}"><label>Primeira mensagem (apresenta-te)</label>'
+                             '<textarea name="text" rows="3" maxlength="300" required></textarea><p><button class="p">Enviar mensagem</button></p></form>')
+                cr = one("select * from contact_req where a=? and b=?", (me, t["id"]))
+                if cr and cr["status"] == "ok":
+                    ct = ([f'{eh("Email")}: <b>{e(t["email"])}</b>'] if cr["s_email"] else []) + ([f'{eh("Telemóvel")}: <b>{e(t["phone"])}</b>'] if cr["s_phone"] and t["phone"] else [])
+                    act += '<div class="card"><h2>Contacto autorizado</h2><p>' + "<br>".join(ct) + '</p></div>'
+                elif cr and cr["status"] == "pending": act += '<p class="m">Pedido de contacto enviado. Aguarda a autorização.</p>'
+                elif cr: act += '<p class="m">A pessoa preferiu não partilhar o contacto.</p>'
+                else: act += f'<form method="post" action="/people/ask"><input type="hidden" name="id" value="{t["id"]}"><button>Pedir email / telemóvel</button><p class="m">A pessoa escolhe se autoriza e o que partilha.</p></form>'
+            body = (top + flash + act + '<div class="card"><h2>Funções</h2>' + (self.chips(roles) or '<span class="m">—</span>') + '</div>'
+                    + ('<div class="card"><h2>Software</h2>' + self.chips(people.csv(pr["software"]), "n") + '</div>' if (pr["software"] or "").strip() else "")
+                    + ('<div class="card"><h2>Equipamento</h2>' + self.chips(people.csv(pr["gear"]), "n") + '</div>' if (pr["gear"] or "").strip() else "")
+                    + sec("Carreira", pr["career"]) + sec("Empresas para as quais trabalha", pr["companies"]) + sec("Projetos e eventos", pr["projects"]))
+            return page(uname(t), body, "/people", u)
+        # diretório
+        q, role, city, trav = g("q").strip()[:80], g("role"), g("city").strip()[:60], g("trav")
+        rs = rows("select u.id, u.name, u.username, u.av_v, u.last_seen, pr.* from pro pr join users u on u.id=pr.user_id where pr.visible=1 and u.disabled=0 and u.id!=?", (me,))
+        out = []
+        for r in rs:
+            if role in people.ROLES and role not in (r["roles"] or "").split(","): continue
+            if city and people.norm(city) not in people.norm(r["city"]): continue
+            if trav and (r["travel"] or "no") == "no": continue
+            if q and not people.match(r, q): continue
+            out.append(r)
+        out.sort(key=lambda r: (not is_online(r["id"]), uname(r).lower())); total = len(out); out = out[:60]
+        cards = ""
+        for r in out:
+            rn = self.role_names(r) + people.csv(r["roles_other"], 3); more = len(rn) - 3
+            tg = "".join(f"<i>{e(x)}</i>" for x in rn[:3]) + (f"<i>+{more}</i>" if more > 0 else "")
+            cards += (f'<a class="pc" href="/people/p?id={r["id"]}"><span class="avw">{uav(r)}<i class="dot" data-pres="{r["id"]}"{"" if is_online(r["id"]) else " hidden"}></i></span><span><b>{e(uname(r))}</b>'
+                      f'<small>{e(r["headline"] or "")}</small><small>{"📍 " + e(r["city"]) if r["city"] else ""}{" · ✈" if (r["travel"] or "no") != "no" else ""}</small><div class="tg2">{tg}</div></span></a>')
+        ropt = '<option value="">Todas as funções</option>' + "".join('<optgroup label="' + e(tx(gp[0][0])) + '">' + "".join(f'<option value="{r_[0]}"{" selected" if role == r_[0] else ""}>{e(r_[1])}</option>' for r_ in gp[1]) + '</optgroup>' for gp in people.GROUPS)
+        pq = one("select count(*) from contact_req where b=? and status='pending'", (me,))[0]
+        top = ('<div class="bar-h"><div><h1>AV Freelancers</h1><p class="sub" style="margin:0">Encontra colegas do audiovisual, partilha conhecimento, contactos e trabalhos.</p></div>'
+               '<a class="btn p" href="/people/me">O meu perfil</a></div>' + flash
+               + (f'<p class="msg ok"><a href="/people/requests">{pq} {eh("pedido(s) de contacto à espera de resposta")} ›</a></p>' if pq else "")
+               + ('' if pro and pro["visible"] else '<p class="msg err">O teu perfil ainda não está visível para outros. <a href="/people/me">Preencher e ativar</a></p>'))
+        flt = ('<form class="f fl" method="get" action="/people"><div><label>Pesquisar (ex.: grandMA3, Resolume, Sony FX6)</label><input name="q" value="' + e(q) + '" maxlength="80"></div>'
+               f'<div><label>Função</label><select name="role">{ropt}</select></div><div><label>Cidade</label><input name="city" value="{e(city)}" maxlength="60"></div>'
+               f'<div><label class="c"><input type="checkbox" name="trav" value="1"{" checked" if trav else ""}>Disponível a viajar</label></div><div><button class="p">Procurar</button></div></form>')
+        res = (f'<p class="m">{total} {eh("resultado(s)")}</p><div class="pf">{cards}</div>' if out else '<p class="m">Ainda não há perfis com estes filtros.</p>')
+        return page("AV Freelancers", top + flt + res + '<p class="m"><a href="/people/requests">Pedidos de contacto</a></p>', "/people", u)
+
+    def people_post(self, u, p, f):
+        me = u["id"]; go = lambda k, to="/people": self.go(to + ("&" if "?" in to else "?") + "ok=" + k)
+        if p == "/people/me":
+            roles = ",".join(k for k in self.fl.get("role", []) if k in people.ROLES)
+            tv = f.get("travel") if f.get("travel") in people.TRAVEL_D else "no"; cl = lambda k, n: f.get(k, "").strip()[:n]
+            v = (1 if f.get("visible") else 0, cl("headline", 100), cl("city", 80), tv, roles, cl("roles_other", 200), cl("software", 400), cl("gear", 400), cl("career", 2000), cl("companies", 800), cl("projects", 1500), now_str())
+            run("insert into pro(visible,headline,city,travel,roles,roles_other,software,gear,career,companies,projects,updated,user_id) values(?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                "on conflict(user_id) do update set visible=excluded.visible,headline=excluded.headline,city=excluded.city,travel=excluded.travel,roles=excluded.roles,roles_other=excluded.roles_other,"
+                "software=excluded.software,gear=excluded.gear,career=excluded.career,companies=excluded.companies,projects=excluded.projects,updated=excluded.updated", v + (me,))
+            return go("saved", "/people/me")
+        if p in ("/people/msg", "/people/ask"):
+            tid = int(f.get("id") or 0); t = one("select * from users where id=? and disabled=0", (tid,)); pr = self.pro_of(tid) if t else None
+            if not t or tid == me or not pr or not pr["visible"]: return self.go("/people")
+            back = f"/people/p?id={tid}"
+            ip = "pm" + str(me); n, t0 = self.fails.get(ip, (0, 0))
+            if n >= 20 and time.time() - t0 < 3600: return go("limit", back)
+            self.fails[ip] = (n + 1 if time.time() - t0 < 3600 else 1, time.time())
+            if p == "/people/ask":
+                run("insert or ignore into contact_req(a,b,status,created) values(?,?,'pending',?)", (me, tid, now_str())); push_sync(tid); return go("asked", back)
+            ex = one("select * from friends where (a=? and b=?) or (a=? and b=?)", (me, tid, tid, me))
+            if ex and ex["status"] == "ok": return self.go(f"/chat/{dm_chat(me, tid)}")
+            if ex and ex["a"] == me: return go("pend", back)
+            intro = f.get("text", "").strip()[:300]
+            if ex: accept_friend(ex); return self.go(f"/chat/{dm_chat(me, tid)}")
+            run("insert into friends(a,b,status,created,intro) values(?,?,'pending',?,?)", (me, tid, now_str(), intro)); push_sync(tid); return go("sent", back)
+        if p in ("/people/answer", "/people/revoke"):
+            r = one("select * from contact_req where id=? and (a=? or b=?)", (f.get("id") or 0, me, me))
+            if not r: return self.go("/people/requests")
+            if p == "/people/revoke":
+                if r["a"] == me: run("delete from contact_req where id=?", (r["id"],))
+                else: run("update contact_req set status='no', s_email=0, s_phone=0 where id=?", (r["id"],))
+                push_sync(r["a"], r["b"]); return go("gone", "/people/requests")
+            if r["b"] != me: return self.go("/people/requests")
+            if f.get("act") == "ok":
+                se, sp = (1 if f.get("s_email") else 0), (1 if f.get("s_phone") and u["phone"] else 0)
+                if not (se or sp): return go("none", "/people/requests")
+                run("update contact_req set status='ok', s_email=?, s_phone=? where id=?", (se, sp, r["id"]))
+            else: run("update contact_req set status='no' where id=?", (r["id"],))
+            push_sync(r["a"], me); return go("answered", "/people/requests")
+        return self.go("/people")
+
     # ---- exportação (PDF / Excel)
     XL = {"page": "Página", "generated": "Gerado em", "inv_date": "Data fatura", "event": "Evento", "client": "Cliente", "inv_no": "N.º fatura", "base": "Base (sem IVA)", "vat": "IVA", "wh": "Retenção",
           "total": "Total a receber", "status": "Estado", "totals": "Totais", "start": "Início", "end": "Fim", "none": "Sem eventos neste filtro.", "s_base": "Valor sem IVA", "s_vat": "IVA", "s_wh": "Retenção IRS",
@@ -1895,6 +2067,7 @@ class H(BaseHTTPRequestHandler):
         return page("Conta", f'<h1>Conta</h1><p class="sub">Os teus dados e a tua segurança.</p>{m}<form class="f card" method="post" action="/settings/profile"><h2>Dados pessoais</h2>'
             + fld("Nome", "name", val=u["name"], extra="required") + fld("Email", "email", "email", u["email"], "required") + fld("Telemóvel", "phone", "tel", u["phone"] or "")
             + f'<p class="m">Utilizador: <b>{e(u["username"])}</b></p><p><button class="p">Guardar dados</button></p></form>'
+            + '<div class="card"><h2>Perfil profissional</h2><p class="m">Aparece na rede AV Freelancers para outros colegas te encontrarem. Só fica visível se tu quiseres.</p><p><a class="btn" href="/people/me">Editar perfil profissional</a></p></div>'
             + self.theme_card(u) + self.tax_card(u) +
             '<div class="card" id="pwa"><h2>Instalar como aplicação</h2><p class="m">Usa o site como uma app no telemóvel: ícone no ecrã principal, ecrã inteiro e avisos.</p>'
             '<p><button type="button" class="p" id="pwab" hidden>Instalar app</button></p>'

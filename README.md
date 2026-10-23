@@ -63,3 +63,6 @@ A primeira conta registada é administradora. Ícone **Admin** no menu: resumo e
 ## Tema e exportação
 - Definições → Aspeto: automático, claro (dia) ou escuro (noite).
 - Estatísticas → Exportar (ou ligações nos eventos e clientes): PDF/Excel por evento, cliente, mês ou intervalo de datas. Gerado em `export.py`, sem bibliotecas externas. Não é uma fatura.
+
+## AV Freelancers (rede)
+Perfil profissional opcional (Definições → Perfil profissional, ou menu AV Freelancers): funções, cidade, disponibilidade para viajar, software, equipamento e carreira. Só aparece na pesquisa se o utilizador ativar «visível». Mensagens passam pelo chat (a primeira mensagem segue num pedido de amizade); email/telemóvel só são partilhados após autorização. Lógica e listas em `people.py` (Dockerfile já copia `*.py`).
