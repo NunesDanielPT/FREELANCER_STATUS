@@ -8,7 +8,9 @@ from email.utils import formataddr
 from http import cookies
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs, quote
-import i18n, ws, guide, guide_art
+import i18n, ws, guide, guide_art, export
+import threading as _th
+THR = _th.local()
 from i18n import tx, M0, M1
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -121,7 +123,7 @@ def migrate(c):
         if ec and name not in ec: c.execute(f"alter table events add column {name} {ddl}")
     mc = {r[1] for r in c.execute("pragma table_info(chat_msgs)")}
     if mc and "img" not in mc: c.execute("alter table chat_msgs add column img integer default 0")
-    for name, ddl in (("is_admin", "integer default 0"), ("disabled", "integer default 0"), ("last_seen", "text"), ("av_v", "integer default 0"), ("guide_seen", "integer default 0"), ("vat_country", "text default 'PT'"), ("vat_def", "text default 'none'"), ("wh_def", "real default 0"), ("ss_on", "integer default 0"), ("ss_rate", "real default 21.4"), ("ss_coef", "real default 70")):
+    for name, ddl in (("is_admin", "integer default 0"), ("disabled", "integer default 0"), ("last_seen", "text"), ("av_v", "integer default 0"), ("guide_seen", "integer default 0"), ("theme", "text default 'auto'"), ("vat_country", "text default 'PT'"), ("vat_def", "text default 'none'"), ("wh_def", "real default 0"), ("ss_on", "integer default 0"), ("ss_rate", "real default 21.4"), ("ss_coef", "real default 70")):
         if name not in cols: c.execute(f"alter table users add column {name} {ddl}")
     if not c.execute("select 1 from users where is_admin=1").fetchone():
         c.execute("update users set is_admin=1 where id=(select min(id) from users)")
@@ -181,7 +183,7 @@ def theme_css(c):
         return o + (f".btn.p,button.p,.cell.now span,.me{{color:{on(P['brand'])}}}.chip.on.p2,.bar.paid{{color:{on(P['paid'])}}}"
                     f".chip.on.f,.bar.inv{{color:{on(P['inv'])}}}.bar.todo{{color:{on(P['todo'])}}}")
     L = dict(zip(names, (c[k] for k in COLOR_KEYS))); Dk = {n: mixhex(v) for n, v in L.items()}
-    return block(L) + "@media(prefers-color-scheme:dark){" + block(Dk) + "}" + f".hero{{background:color-mix(in srgb,{L['brand']} 24%,#080b1a)}}"
+    return darkify(block(L) + "@media(prefers-color-scheme:dark){" + block(Dk) + "}") + f".hero{{background:color-mix(in srgb,{L['brand']} 24%,#080b1a)}}"
 
 def logo(c, standalone=False):
     x = ' xmlns="http://www.w3.org/2000/svg"' if standalone else ' class="lg"'
@@ -383,6 +385,27 @@ details summary{cursor:pointer;color:var(--todo);margin-top:18px}.msg{padding:10
 """
 CSS += guide_art.CSS
 
+def darkify(css):
+    """converte cada @media(prefers-color-scheme:dark){...} para funcionar tambem com data-theme=dark e respeitar data-theme=light"""
+    out, i, key = [], 0, "@media(prefers-color-scheme:dark){"
+    while True:
+        j = css.find(key, i)
+        if j < 0: out.append(css[i:]); break
+        out.append(css[i:j]); k = j + len(key); depth = 1; m = k
+        while depth:
+            ch = css[m]; depth += (ch == "{") - (ch == "}"); m += 1
+        inner = css[k:m - 1]; auto, forced = [], []
+        for rule in inner.split("}"):
+            if "{" not in rule: continue
+            sel, body = rule.split("{", 1)
+            sels = [x.strip() for x in sel.split(",")]
+            auto.append(",".join(":root:not([data-theme=light])" + ("" if x == ":root" else " " + x) for x in sels) + "{" + body + "}")
+            forced.append(",".join(":root[data-theme=dark]" + ("" if x == ":root" else " " + x) for x in sels) + "{" + body + "}")
+        out.append("@media(prefers-color-scheme:dark){" + "".join(auto) + "}" + "".join(forced)); i = m
+    return "".join(out)
+
+CSS = darkify(CSS)
+
 CSS += """
 .adw{margin:0 0 18px}.adw small{display:block;color:var(--mut);font-size:.7rem;margin-bottom:3px}
 .ad{display:block;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--sf);text-decoration:none;text-align:center}
@@ -473,7 +496,8 @@ def foot(n=0):
             f'<div class="m">Feito por Daniel Nunes · Made in Portugal {FLAG}</div></footer>')
 
 def head(t, c):
-    return ('<!doctype html><html lang="' + i18n.lang() + '"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="'
+    th = getattr(THR, "theme", "auto"); th = th if th in ("light", "dark") else ""
+    return ('<!doctype html><html lang="' + i18n.lang() + '"' + (f' data-theme="{th}"' if th else "") + '><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="'
             + c["c_brand"] + '"><link rel="manifest" href="/manifest.webmanifest"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="' + html.escape(SN()) + '"><meta name="apple-mobile-web-app-status-bar-style" content="default"><title>' + t + '</title>' + fav(c) + '<style>' + CSS + theme_css(c) + '</style></head><body>')
 
 def page(title, body, active, u):
@@ -716,11 +740,12 @@ class H(BaseHTTPRequestHandler):
     def log_message(self, *a): pass
 
     def user(self):
-        m = cookies.SimpleCookie(self.headers.get("Cookie", "")).get("s")
+        ck = cookies.SimpleCookie(self.headers.get("Cookie", "")); THR.theme = (ck.get("theme").value if ck.get("theme") else "auto")
+        m = ck.get("s")
         try:
             i, x, sig = m.value.split("."); u = one("select * from users where id=?", (i,))
             if u and not u["disabled"] and int(x) > time.time() and hmac.compare_digest(sig, sign(f"{i}.{x}.{u['pw'][-16:]}")):
-                PULSE[u["id"]] = time.time()
+                PULSE[u["id"]] = time.time(); THR.theme = u["theme"] or "auto"
                 now = dt.datetime.now().strftime("%Y-%m-%d %H:%M")
                 if (u["last_seen"] or "")[:15] != now[:15]: run("update users set last_seen=? where id=?", (now, u["id"]))
                 return u
@@ -763,6 +788,8 @@ class H(BaseHTTPRequestHandler):
             if u: return self.go("/")
             return self.out({"/login": lambda: self.login_page(ok=g("ok")), "/register": self.register_page, "/forgot": self.forgot_page, "/reset": lambda: self.reset_page(g("t"))}[p]())
         if p == "/ws": return self.websocket(u)
+        if p == "/export" and u: return self.out(self.export_page(u, g))
+        if p == "/export/run" and u: return self.export_run(u, g)
         if p == "/guide" or p.startswith("/guide/"):
             if u and p == "/guide" and not u["guide_seen"]: run("update users set guide_seen=1 where id=?", (u["id"],))
             try: return self.out(self.guide_page(u, p))
@@ -839,6 +866,10 @@ class H(BaseHTTPRequestHandler):
         if p == "/settings/avatar/remove":
             run("delete from avatars where user_id=?", (i,)); run("update users set av_v=0 where id=?", (i,)); return self.go("/settings?ok=avatar_rm")
         if p == "/settings/ics": run("update users set ics=? where id=?", (secrets.token_hex(20), i)); return self.go("/settings?ok=ics")
+        if p == "/settings/theme":
+            t = f.get("t") if f.get("t") in ("auto", "light", "dark") else "auto"
+            run("update users set theme=? where id=?", (t, u["id"]))
+            return self.go("/settings?ok=theme", [("Set-Cookie", f"theme={t}; Path=/; Max-Age=31536000; SameSite=Lax")])
         if p == "/settings/tax":
             vm, vr = parse_vat(f.get("vat", "none"), f.get("vatc", "")); co = f.get("country", "PT") if f.get("country") in COUNTRIES else "PT"
             run("update users set vat_country=?, vat_def=?, wh_def=?, ss_on=?, ss_rate=?, ss_coef=? where id=?",
@@ -1262,7 +1293,7 @@ class H(BaseHTTPRequestHandler):
             '<datalist id="sug">' + "".join(f'<option value="{eh(tx(x))}">' for x in ("Diária", "Meia diária", "Hora extra", "Aluguer de equipamento", "Deslocação", "Edição")) + '</datalist>'
             + f'<div class="g2"><div><label>Data da fatura (vazio = por faturar)</label><input type="date" name="invoice_date" value="{e(v["invoice_date"] if v else "")}"></div><div><label>N.º da fatura</label><input name="invoice_no" value="{e(v["invoice_no"] if v else "")}"></div></div>'
             f'<label class="c" style="margin-top:14px"><input type="checkbox" name="paid" {ck(v and v["paid"])}>Fatura paga (já recebi)</label><label>Notas</label><textarea name="notes" rows="3">{e(v["notes"] if v else "")}</textarea>'
-            '<p><button class="p">Guardar</button> <a class="btn" href="/events">Cancelar</a></p></form>' + dele
+            '<p><button class="p">Guardar</button> <a class="btn" href="/events">Cancelar</a></p></form>' + (f'<div class="card"><b>Exportar este evento</b><p class="m" style="margin:4px 0 10px">Resumo informativo (não é uma fatura).</p><a class="btn" href="/export/run?scope=event&id={v["id"]}&fmt=pdf">PDF</a> <a class="btn" href="/export/run?scope=event&id={v["id"]}&fmt=xlsx">Excel</a></div>' if v else "") + dele
             + CUJS + '<script nonce="__NONCE__">(function(){var L=document.getElementById("items"),T=document.getElementById("tot");function tot(){var s=0;L.querySelectorAll("[name=amt]").forEach(function(i){s+=parseFloat(i.value.replace(",","."))||0});T.textContent=s.toFixed(2).replace(".","' + dsep() + '")+" €";if(window.TX)window.TX(s)}'
             'L.addEventListener("input",tot);tot();document.getElementById("add").onclick=function(){var d=document.createElement("div");d.className="it";d.innerHTML=\'<input name="label" list="sug" placeholder="' + tx("Descrição") + '"><input name="amt" inputmode="decimal" placeholder="0' + dsep() + '00">\';L.appendChild(d);d.firstChild.focus()};'
             'var S=document.getElementById("cs"),I=document.getElementById("ci");function inf(){var o=S.options[S.selectedIndex];I.textContent=o.dataset.i||"";I.hidden=!o.dataset.i}S.onchange=inf;inf();'
@@ -1310,7 +1341,8 @@ class H(BaseHTTPRequestHandler):
         ta = lambda k, lab: f'<label>{lab}</label><textarea name="{k}" rows="3">{e(g(k))}</textarea>'
         hist = ("<h2>Eventos deste cliente</h2>" + lst(rows(EV + "where e.user_id=? and e.client_id=? order by e.start_date desc", (u["id"], i)), f"/client/{i}", "Sem eventos.")) if v else ""
         dele = f'<details><summary>Apagar cliente</summary><form method="post" action="/client/{v["id"]}/delete"><p class="m">Os eventos ficam, mas sem cliente.</p><button class="d">Confirmar: apagar</button></form></details>' if v else ""
-        return page("Cliente", f'<div class="bar-h"><h1>{"Editar" if v else "Novo"} cliente</h1>{avatar(g("name") or "?", g("logo")) if v else ""}</div><form class="f card" method="post" action="/client/save"><input type="hidden" name="id" value="{g("id")}">'
+        exp = (f'<div class="card"><b>Exportar todos os eventos deste cliente</b><p class="m" style="margin:4px 0 10px">Para um período ou estado específico usa <a href="/export?client={v["id"]}">Exportar</a>.</p><a class="btn" href="/export/run?client={v["id"]}&fmt=pdf">PDF</a> <a class="btn" href="/export/run?client={v["id"]}&fmt=xlsx">Excel</a></div>') if v else ""
+        return page("Cliente", exp + f'<div class="bar-h"><h1>{"Editar" if v else "Novo"} cliente</h1>{avatar(g("name") or "?", g("logo")) if v else ""}</div><form class="f card" method="post" action="/client/save"><input type="hidden" name="id" value="{g("id")}">'
             + fld("Nome", "name", val=g("name"), extra="required") + fld("URL do logo (opcional)", "logo", "url", g("logo"), 'placeholder="https://..."') + fld("NIF", "nif", val=g("nif")) + fld("Contacto", "contact", val=g("contact"))
             + fld("Valores acordados (ex.: 250 €/dia)", "rate", val=g("rate")) + ta("terms", "Condições de pagamento") + ta("notes", "Notas") + '<p><button class="p">Guardar</button> <a class="btn" href="/clients">Cancelar</a></p></form>' + hist + dele, "/clients", u)
 
@@ -1388,7 +1420,7 @@ class H(BaseHTTPRequestHandler):
         mx = max([c["v"] or 0 for c in cl] + [1]); mxd = max([c["d"] or 0 for c in cl] + [1])
         hb = lambda key, mxv, fmt: "".join(f'<div class="hb"><span>{e(c["name"])}</span><div class="t"><i style="width:{max(2, 100 * (c[key] or 0) / mxv):.0f}%"></i></div><b>{fmt(c[key])}</b></div>' for c in cl[:8]) or '<p class="m">Sem dados neste ano.</p>'
         ct = "".join(f'<tr><td>{e(c["name"])}</td><td>{c["n"]}</td><td>{c["d"]:g}</td><td>{eur(c["v"])}</td><td>{eur(c["v"] / c["d"]) if c["d"] else "—"}</td><td>{100 * c["v"] / tf:.0f}%</td></tr>' for c in cl) if tf else ""
-        return page("Estatísticas", f'<div class="bar-h"><div><h1>Estatísticas</h1><p class="sub" style="margin:0">Contam os eventos já faturados, no mês e ano da data da fatura.</p></div></div><div class="chips">{chips}</div>{strip}'
+        return page("Estatísticas", f'<div class="bar-h"><div><h1>Estatísticas</h1><p class="sub" style="margin:0">Contam os eventos já faturados, no mês e ano da data da fatura. <a href="/export">Exportar relatório ›</a></p></div></div><div class="chips">{chips}</div>{strip}'
             f'<h2>Faturado e recebido por mês</h2><div class="card">{self.chart(fat, rec)}<div class="lgd m"><span style="--c:var(--brand)">faturado</span><span style="--c:var(--paid)">recebido</span></div></div>'
             f'<div class="card sc"><table class="tb"><tr><th>Mês</th><th>Eventos</th><th>Faturado</th><th>Recebido</th><th>Por receber</th></tr>{mt}<tr><td><b>Total</b></td><td><b>{sum(cnt)}</b></td><td><b>{eur(tf)}</b></td><td><b>{eur(tr)}</b></td><td><b>{eur(tf - tr)}</b></td></tr></table></div>'
             f'<h2>Clientes</h2><div class="g2"><div class="card"><b>Quem dá mais volume</b><div style="margin-top:8px">{hb("v", mx, eur)}</div></div><div class="card"><b>Dias trabalhados</b><div style="margin-top:8px">{hb("d", mxd, lambda v: f"{v:g} dias")}</div></div></div>'
@@ -1764,6 +1796,83 @@ class H(BaseHTTPRequestHandler):
             f'<div class="row2">{btn("close", "Reabrir conversa" if t["status"] == "closed" else "Fechar conversa")}{btn("delete", "Apagar conversa", "d")}</div>'), ok, err)
 
     # ---- definições
+    # ---- exportação (PDF / Excel)
+    XL = {"page": "Página", "generated": "Gerado em", "inv_date": "Data fatura", "event": "Evento", "client": "Cliente", "inv_no": "N.º fatura", "base": "Base (sem IVA)", "vat": "IVA", "wh": "Retenção",
+          "total": "Total a receber", "status": "Estado", "totals": "Totais", "start": "Início", "end": "Fim", "none": "Sem eventos neste filtro.", "s_base": "Valor sem IVA", "s_vat": "IVA", "s_wh": "Retenção IRS",
+          "s_total": "Total a receber", "s_paid": "Já recebido", "s_due": "Por receber", "st_todo": "Por faturar", "st_inv": "Faturada", "st_paid": "Paga", "name": "Nome", "nif": "NIF", "contact": "Contacto",
+          "invoice": "Fatura", "desc": "Descrição", "amount": "Valor", "notes": "Notas", "dates": "Datas", "sheet": "Eventos", "sheet_event": "Evento"}
+
+    def export_doc(self, u, f):
+        c = cfg(); T = {k: tx(v) for k, v in self.XL.items()}; lang = i18n.lang(); i = u["id"]
+        clean = lambda s: s.replace("\u202f", " ").replace("\xa0", " ")
+        eurx = lambda v: clean(eur(v)); dd = lambda s: f"{s[8:10]}/{s[5:7]}/{s[:4]}" if s else ""
+        cols = tuple(c[k] for k in COLOR_KEYS)
+        issuer_kv = [(tx("Emitido por"), u["name"] or u["username"]), (tx("Utilizador"), u["username"]), (tx("Email"), u["email"])] + ([(tx("Telemóvel"), u["phone"])] if u["phone"] else [])
+        issuer = [u["name"] or u["username"], f'@{u["username"]}  |  {u["email"]}'] + ([u["phone"]] if u["phone"] else [])
+        doc = {"T": T, "eur": eurx, "d": dd, "cols": cols, "site": c["site_name"], "issuer": issuer, "issuer_kv": issuer_kv, "generated": dt.datetime.now().strftime("%d/%m/%Y %H:%M"),
+               "disclaimer": tx("Documento informativo gerado pelo Claquete. Não é uma fatura nem um documento fiscal."), "png": png_icon(96, cols)}
+        def mk(r):
+            v, w, t_ = tax_of(r); return {"id": r["id"], "title": r["title"], "start": r["start_date"], "end": r["end_date"], "client": r["cn"] or "", "invoice_date": r["invoice_date"] or "", "invoice_no": r["invoice_no"] or "",
+                                          "base": r["amount"] or 0, "vat": v, "wh": w, "total": t_, "state": state(r), "notes": r["notes"] or "", "paid_date": r["paid_date"] or ""}
+        if f.get("scope") == "event":
+            r = one(EV + "where e.id=? and e.user_id=?", (f.get("id") or 0, i))
+            if not r: raise ValueError
+            x = mk(r); cl = one("select * from clients where id=?", (r["client_id"],)) if r["client_id"] else None
+            doc["kind"] = "event"; doc["title"] = tx("Resumo do evento"); doc["rows"] = [x]
+            doc["client"] = [(T["name"], cl["name"])] + ([(T["nif"], cl["nif"])] if cl["nif"] else []) + ([(T["contact"], cl["contact"])] if cl["contact"] else []) if cl else None
+            doc["invoice"] = [(T["inv_no"], x["invoice_no"] or "—"), (T["inv_date"], dd(x["invoice_date"]) or "—"), (T["status"], T["st_" + x["state"]])] + ([(tx("Pago em"), dd(x["paid_date"]))] if x["paid_date"] else [])
+            doc["lines"] = [(l["label"], l["amount"]) for l in rows("select * from items where event_id=? order by id", (r["id"],))] or [(r["title"], x["base"])]
+            doc["vat_text"] = f'{tx("IVA")} {pct(r["vat_rate"])}%' if r["vat_mode"] == "rate" else (tx("IVA liquidado pelo cliente (autoliquidação)") if r["vat_mode"] == "rc" else "")
+            doc["wh_text"] = f'{tx("Retenção")} {pct(r["wh_rate"])}%' if r["wh_rate"] else ""
+            doc["vat_rate"] = r["vat_rate"] if r["vat_mode"] == "rate" else 0; doc["wh_rate"] = r["wh_rate"] or 0
+            doc["dates"] = dd(x["start"]) + ("" if x["start"] == x["end"] else " – " + dd(x["end"]))
+            doc["totals"] = {"base": x["base"], "vat": x["vat"], "wh": x["wh"], "total": x["total"]}; doc["name"] = "evento-" + re.sub(r"[^a-z0-9]+", "-", r["title"].lower()).strip("-")[:30]
+            return doc
+        where, args = ["e.user_id=?"], [i]; by = "e.invoice_date" if f.get("by", "invoice") == "invoice" else "e.start_date"; a = b = ""
+        mo = f.get("month", "")
+        if re.match(r"^\d{4}-(0[1-9]|1[0-2])$", mo): y_, m_ = int(mo[:4]), int(mo[5:]); a = f"{mo}-01"; b = f"{mo}-{calendar.monthrange(y_, m_)[1]:02d}"
+        else: a, b = okdate(f.get("from", "")) or "", okdate(f.get("to", "")) or ""
+        if a: where.append(f"{by}>=?"); args.append(a)
+        if b: where.append(f"{by}<=?"); args.append(b)
+        cl = None
+        if f.get("client") and f["client"].isdigit():
+            cl = one("select * from clients where id=? and user_id=?", (f["client"], i))
+            if cl: where.append("e.client_id=?"); args.append(cl["id"])
+        stt = f.get("status", "all"); where.append({"todo": "e.invoice_date is null", "inv": "e.invoice_date is not null and e.paid=0", "paid": "e.paid=1"}.get(stt, "1=1"))
+        rs = [mk(r) for r in rows(EV + "where " + " and ".join(where) + " order by coalesce(e.invoice_date, e.start_date), e.start_date", args)]
+        tot = {k: sum(x[k] for x in rs) for k in ("base", "vat", "wh", "total")}; tot["paid"] = sum(x["total"] for x in rs if x["state"] == "paid"); tot["due"] = sum(x["total"] for x in rs if x["state"] == "inv")
+        per = f"{dd(a)} – {dd(b)}" if a and b else (f"{tx('desde')} {dd(a)}" if a else (f"{tx('até')} {dd(b)}" if b else tx("Todo o período")))
+        doc["kind"] = "list"; doc["title"] = tx("Relatório de eventos"); doc["rows"] = rs; doc["totals"] = tot
+        doc["filters"] = [(tx("Período"), per), (tx("Contar por"), tx("Data da fatura") if f.get("by", "invoice") == "invoice" else tx("Data do evento")), (T["status"], {"todo": T["st_todo"], "inv": T["st_inv"], "paid": T["st_paid"]}.get(stt, tx("Todos")))]
+        doc["client"] = [(T["name"], cl["name"])] + [(k, cl[x]) for k, x in ((T["nif"], "nif"), (T["contact"], "contact"), (tx("Tarifa"), "rate"), (tx("Condições"), "terms")) if cl[x]] if cl else None
+        if cl and doc["client"]: doc["filters"] = [(T["client"], cl["name"])] + doc["filters"]
+        doc["name"] = "relatorio" + (f"-{mo}" if mo and a else (f"-{a}-{b}" if a and b else "")) + ("-" + re.sub(r"[^a-z0-9]+", "-", cl["name"].lower()).strip("-")[:20] if cl else "")
+        return doc
+
+    def export_run(self, u, g):
+        f = {k: g(k) for k in ("scope", "id", "client", "month", "from", "to", "by", "status")}; fmt = g("fmt", "pdf")
+        doc = self.export_doc(u, f); ev = doc["kind"] == "event"
+        if fmt == "xlsx": body = export.xlsx_event(doc) if ev else export.xlsx_list(doc); ct, ext = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "xlsx"
+        else: body = export.pdf_event(doc) if ev else export.pdf_list(doc); ct, ext = "application/pdf", "pdf"
+        self.out(body, 200, ct, (("Content-Disposition", f'attachment; filename="claquete-{doc["name"]}.{ext}"'), ("Cache-Control", "no-store")))
+
+    def export_page(self, u, g):
+        cl = "".join(f'<option value="{c["id"]}"{" selected" if g("client") == str(c["id"]) else ""}>{e(c["name"])}</option>' for c in rows("select * from clients where user_id=? order by name", (u["id"],)))
+        return page("Exportar", '<h1>Exportar</h1><p class="sub">Descarrega um relatório em PDF ou Excel dos teus eventos e faturas.</p>'
+            '<form class="f card" method="get" action="/export/run"><label>Cliente</label><select name="client"><option value="">Todos os clientes</option>' + cl + '</select>'
+            '<div class="g2"><div><label>Mês</label><input type="month" name="month"></div><div></div></div><p class="m" style="margin:6px 0 0">Escolhe um mês ou um intervalo de datas. Se deixares vazio, exporta tudo.</p>'
+            '<div class="g2"><div><label>De</label><input type="date" name="from"></div><div><label>Até</label><input type="date" name="to"></div></div>'
+            '<div class="g2"><div><label>Contar por</label><select name="by"><option value="invoice">Data da fatura</option><option value="event">Data do evento</option></select></div>'
+            '<div><label>Estado</label><select name="status"><option value="all">Todos</option><option value="todo">Por faturar</option><option value="inv">Faturadas (por receber)</option><option value="paid">Pagas</option></select></div></div>'
+            '<p style="margin-top:18px"><button class="p" name="fmt" value="pdf">Descarregar PDF</button> <button name="fmt" value="xlsx">Descarregar Excel</button></p>'
+            '<p class="m">Isto não é uma fatura: é um resumo informativo para teu controlo.</p></form>', "/stats", u)
+
+    def theme_card(self, u):
+        cur = u["theme"] or "auto"
+        b = lambda v, ico, lab: f'<form method="post" action="/settings/theme"><input type="hidden" name="t" value="{v}"><button class="chip{" on p2" if cur == v else ""}">{ico} {lab}</button></form>'
+        return ('<div class="card"><h2>Aspeto</h2><p class="m">Escolhe o tema do site: claro (dia), escuro (noite) ou automático, que segue o teu telemóvel.</p><div class="tg" style="flex-wrap:wrap">'
+                + b("auto", "🌓", "Automático") + b("light", "☀️", "Claro (dia)") + b("dark", "🌙", "Escuro (noite)") + '</div></div>')
+
     def tax_card(self, u):
         co = "".join(f'<option value="{k}"{" selected" if k == (u["vat_country"] or "PT") else ""}>{v[0]}</option>' for k, v in COUNTRIES.items())
         rt = json.dumps({k: [f"{x:g}" for x in v[1]] for k, v in COUNTRIES.items()})
@@ -1782,11 +1891,11 @@ class H(BaseHTTPRequestHandler):
 
     def settings(self, u, ok="", err=""):
         proto = "https" if self.https() else "http"; url = f'{BASE_URL or proto + "://" + str(self.headers.get("Host"))}/calendar.ics?k={u["ics"]}'
-        msg = {"profile": "Dados guardados.", "password": "Palavra-passe alterada.", "ics": "Link novo gerado. O antigo deixou de funcionar.", "avatar": "Foto guardada.", "avatar_rm": "Foto removida.", "tax": "Preferências de faturação guardadas."}.get(ok); m = f'<p class="msg ok">{msg}</p>' if msg else (f'<p class="msg err">{err}</p>' if err else "")
+        msg = {"profile": "Dados guardados.", "password": "Palavra-passe alterada.", "ics": "Link novo gerado. O antigo deixou de funcionar.", "avatar": "Foto guardada.", "avatar_rm": "Foto removida.", "tax": "Preferências de faturação guardadas.", "theme": "Tema guardado."}.get(ok); m = f'<p class="msg ok">{msg}</p>' if msg else (f'<p class="msg err">{err}</p>' if err else "")
         return page("Conta", f'<h1>Conta</h1><p class="sub">Os teus dados e a tua segurança.</p>{m}<form class="f card" method="post" action="/settings/profile"><h2>Dados pessoais</h2>'
             + fld("Nome", "name", val=u["name"], extra="required") + fld("Email", "email", "email", u["email"], "required") + fld("Telemóvel", "phone", "tel", u["phone"] or "")
             + f'<p class="m">Utilizador: <b>{e(u["username"])}</b></p><p><button class="p">Guardar dados</button></p></form>'
-            + self.tax_card(u) +
+            + self.theme_card(u) + self.tax_card(u) +
             '<div class="card" id="pwa"><h2>Instalar como aplicação</h2><p class="m">Usa o site como uma app no telemóvel: ícone no ecrã principal, ecrã inteiro e avisos.</p>'
             '<p><button type="button" class="p" id="pwab" hidden>Instalar app</button></p>'
             '<p class="m"><b>Android (Chrome):</b> menu ⋮ → «Instalar app» ou «Adicionar ao ecrã principal».<br><b>iPhone/iPad (Safari):</b> botão Partilhar → «Adicionar ao ecrã principal».</p></div>'

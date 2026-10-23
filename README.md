@@ -59,3 +59,7 @@ Em Definições → Foto de perfil. A imagem é reduzida no browser (256×256) e
 
 ## Admin
 A primeira conta registada é administradora. Ícone **Admin** no menu: resumo e avisos, contas (editar email, repor password, suspender, apagar), mensagens de suporte, apagar contas (também várias de uma vez), promover administradores pesquisando por utilizador ou email, nome/cores/textos do site, publicidade, backups (automático diário em `/data/backups`), restauro e consola SQL.
+
+## Tema e exportação
+- Definições → Aspeto: automático, claro (dia) ou escuro (noite).
+- Estatísticas → Exportar (ou ligações nos eventos e clientes): PDF/Excel por evento, cliente, mês ou intervalo de datas. Gerado em `export.py`, sem bibliotecas externas. Não é uma fatura.
