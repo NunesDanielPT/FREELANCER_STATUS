@@ -372,7 +372,7 @@ details summary{cursor:pointer;color:var(--todo);margin-top:18px}.msg{padding:10
 .bar{z-index:1;height:calc(var(--lh) - 2px);line-height:calc(var(--lh) - 2px);margin:1px 0;padding:0 8px;font-size:.78rem;font-weight:600;color:#fff;text-decoration:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;background:var(--c)}
 .bar.inv{color:#1b1300}.bar.cs{border-radius:7px 0 0 7px;margin-left:5px}.bar.ce{border-radius:0 7px 7px 0;margin-right:5px}.bar.cs.ce{border-radius:7px}
 .lgd{display:flex;gap:16px;flex-wrap:wrap;margin:12px 0}.lgd span:before{content:"";display:inline-block;width:10px;height:10px;border-radius:3px;background:var(--c);margin-right:6px}
-.ch{width:100%;height:auto}.ch text{fill:var(--mut);font-size:11px}.ch .gl{stroke:var(--line)}.ch .b1{fill:var(--brand)}.ch .b2{fill:var(--paid)}
+.lds{display:flex;gap:6px;flex-wrap:wrap}.ld{font-size:.78rem;padding:3px 10px;border-radius:99px;border:1px solid var(--line)}.ld:before{content:"";display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--c);margin-right:6px}.ld b{margin-right:4px}.card .fl{margin-bottom:10px}.ch{width:100%;height:auto}.ch text{fill:var(--mut);font-size:11px}.ch .gl{stroke:var(--line)}.ch .b1{fill:var(--brand)}.ch .b2{fill:var(--paid)}
 .hb{display:grid;grid-template-columns:minmax(70px,170px) 1fr auto;gap:10px;align-items:center;padding:5px 0}.hb .t{background:var(--bg);border-radius:99px;height:10px}.hb i{display:block;height:10px;border-radius:99px;background:var(--brand)}.hb b{font-variant-numeric:tabular-nums;font-size:.9rem}
 .sc{overflow-x:auto}.tb{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}.tb th,.tb td{padding:9px 10px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}.tb th:first-child,.tb td:first-child{text-align:left}.tb th{color:var(--mut);font-weight:600;font-size:.82rem}
 .tb tr.best td{background:color-mix(in srgb,var(--paid) 12%,transparent)}.tb tr.worst td{background:color-mix(in srgb,var(--todo) 10%,transparent)}
@@ -826,7 +826,7 @@ class H(BaseHTTPRequestHandler):
             if p == "/calendar": return self.out(self.cal(u, g("m")))
             if p == "/events": return self.out(self.events(u, g("f", "todos")))
             if p == "/clients": return self.out(self.clients(u))
-            if p == "/stats": return self.out(self.stats(u, g("y")))
+            if p == "/stats": return self.out(self.stats(u, g("y"), g))
             if p == "/settings": return self.out(self.settings(u, ok=g("ok")))
             if parts[0] == "event" and len(parts) == 2: return self.out(self.event_form(u, parts[1], g("date")))
             if parts[0] == "client" and len(parts) == 2: return self.out(self.client_form(u, parts[1]))
@@ -1400,7 +1400,7 @@ class H(BaseHTTPRequestHandler):
         self.out("\r\n".join(L + ["END:VCALENDAR"]) + "\r\n", 200, "text/calendar; charset=utf-8")
 
     # ---- estatísticas
-    def stats(self, u, y):
+    def stats(self, u, y, g=lambda k, d="": d):
         i = u["id"]; cur = today().year
         years = sorted({int(r["y"]) for r in rows("select distinct substr(invoice_date,1,4) y from events where user_id=? and invoice_date is not null", (i,))} | {cur}, reverse=True)
         try: y = int(y)
@@ -1438,11 +1438,85 @@ class H(BaseHTTPRequestHandler):
         mx = max([c["v"] or 0 for c in cl] + [1]); mxd = max([c["d"] or 0 for c in cl] + [1])
         hb = lambda key, mxv, fmt: "".join(f'<div class="hb"><span>{e(c["name"])}</span><div class="t"><i style="width:{max(2, 100 * (c[key] or 0) / mxv):.0f}%"></i></div><b>{fmt(c[key])}</b></div>' for c in cl[:8]) or '<p class="m">Sem dados neste ano.</p>'
         ct = "".join(f'<tr><td>{e(c["name"])}</td><td>{c["n"]}</td><td>{c["d"]:g}</td><td>{eur(c["v"])}</td><td>{eur(c["v"] / c["d"]) if c["d"] else "—"}</td><td>{100 * c["v"] / tf:.0f}%</td></tr>' for c in cl) if tf else ""
-        return page("Estatísticas", f'<div class="bar-h"><div><h1>Estatísticas</h1><p class="sub" style="margin:0">Contam os eventos já faturados, no mês e ano da data da fatura. <a href="/export">Exportar relatório ›</a></p></div></div><div class="chips">{chips}</div>{strip}'
-            f'<h2>Faturado e recebido por mês</h2><div class="card">{self.chart(fat, rec)}<div class="lgd m"><span style="--c:var(--brand)">faturado</span><span style="--c:var(--paid)">recebido</span></div></div>'
+        return page("Estatísticas", f'<div class="bar-h"><div><h1>Estatísticas</h1><p class="sub" style="margin:0">Contam os eventos já faturados, no mês e ano da data da fatura. <a href="/export">Exportar relatório ›</a></p></div></div><div class="chips">{chips}</div>{strip}' +
+            self.chart_block(u, y, g) +
             f'<div class="card sc"><table class="tb"><tr><th>Mês</th><th>Eventos</th><th>Faturado</th><th>Recebido</th><th>Por receber</th></tr>{mt}<tr><td><b>Total</b></td><td><b>{sum(cnt)}</b></td><td><b>{eur(tf)}</b></td><td><b>{eur(tr)}</b></td><td><b>{eur(tf - tr)}</b></td></tr></table></div>'
             f'<h2>Clientes</h2><div class="g2"><div class="card"><b>Quem dá mais volume</b><div style="margin-top:8px">{hb("v", mx, eur)}</div></div><div class="card"><b>Dias trabalhados</b><div style="margin-top:8px">{hb("d", mxd, lambda v: f"{v:g} dias")}</div></div></div>'
             f'<div class="card sc"><table class="tb"><tr><th>Cliente</th><th>Eventos</th><th>Dias</th><th>Faturado</th><th>€/dia</th><th>Peso</th></tr>{ct}</table></div>' + tax, "/stats", u)
+
+    PAL = ("#4c6ef5", "#f59f00", "#12b886", "#e8590c", "#ae3ec9", "#15aabf", "#e64980", "#82c91e")
+
+    def chart_block(self, u, y, g):
+        i = u["id"]; view = g("g") if g("g") in ("fr", "cl") else "fr"; met = g("m") if g("m") in ("v", "t", "d", "n") else "v"
+        st = g("s") if g("s") in ("all", "paid", "open") else "all"; cid = g("c") if (g("c") or "").isdigit() else ""
+        clients = rows("select id, name from clients where user_id=? order by lower(name)", (i,))
+        data = rows("select e.*, coalesce(c.name,'') cn, julianday(e.end_date)-julianday(e.start_date)+1 dd from events e left join clients c on c.id=e.client_id where e.user_id=? and substr(e.invoice_date,1,4)=?", (i, str(y)))
+        val = lambda r: {"v": r["amount"] or 0, "t": tax_of(r)[2], "d": r["dd"] or 0, "n": 1}[met]
+        data = [r for r in data if (not cid or str(r["client_id"] or "") == cid) and (st == "all" or (st == "paid") == bool(r["paid"]))]
+        mo = lambda r: int(r["invoice_date"][5:7]) - 1
+        money = met in ("v", "t"); fmt = eur if money else (lambda v: f"{v:g}")
+        if view == "fr":
+            a, b = [0.0] * 12, [0.0] * 12
+            for r in data:
+                a[mo(r)] += val(r); b[mo(r)] += val(r) if r["paid"] else 0
+            ser = [(tx("faturado"), "var(--brand)", a), (tx("recebido"), "var(--paid)", b)]; mode = "group"; extra = ""
+        else:
+            tot = {}
+            for r in data: tot[r["client_id"]] = tot.get(r["client_id"], 0) + val(r)
+            order = sorted(tot, key=lambda k: -tot[k]); top = order[:7]; names = {r["client_id"]: r["cn"] for r in data}
+            ser = []
+            for n_, k in enumerate(top):
+                arr = [0.0] * 12
+                for r in data:
+                    if r["client_id"] == k: arr[mo(r)] += val(r)
+                ser.append((names[k] or tx("Sem cliente"), self.PAL[n_], arr))
+            if len(order) > 7:
+                arr = [0.0] * 12
+                for r in data:
+                    if r["client_id"] not in top: arr[mo(r)] += val(r)
+                ser.append((tx("Outros"), "#8a95a3", arr, False))
+            mode = "stack"
+            tm = [sum(x[2][k] for x in ser) for k in range(12)]
+            lead = ""
+            for k in range(12):
+                if tm[k] > 0:
+                    w = max(ser, key=lambda x: x[2][k]); lead += f'<span class="ld" style="--c:{w[1]}"><b>{MES[k][:3].capitalize()}</b> {e(w[0])} {100 * w[2][k] / tm[k]:.0f}%</span>'
+            extra = (f'<h3 class="m" style="margin:14px 0 6px">Cliente com mais peso em cada mês</h3><div class="lds">{lead}</div>' if lead else "")
+        lg = "".join(f'<span style="--c:{c_}">{e(n_) if view == "cl" else n_}{" · " + fmt(sum(a_)) if view == "cl" else ""}</span>' for n_, c_, a_ in ser)
+        o = lambda v, lab, cur: f'<option value="{v}"{" selected" if cur == v else ""}>{lab}</option>'
+        sel = lambda name, lab, opts: f'<div><label>{lab}</label><select name="{name}">{opts}</select></div>'
+        form = (f'<form class="f fl" id="cf" method="get" action="/stats#chart"><input type="hidden" name="y" value="{y}">'
+                + sel("g", "Gráfico", o("fr", "Faturado e recebido", view) + o("cl", "Peso de cada cliente", view))
+                + sel("m", "Medir", o("v", "Valor sem IVA", met) + o("t", "Total a receber", met) + o("d", "Dias trabalhados", met) + o("n", "Nº de eventos", met))
+                + sel("c", "Cliente", '<option value="">Todos os clientes</option>' + "".join(f'<option value="{c_["id"]}"{" selected" if cid == str(c_["id"]) else ""}>{e(c_["name"])}</option>' for c_ in clients))
+                + sel("s", "Estado", o("all", "Todos", st) + o("paid", "Só pagos", st) + o("open", "Por receber", st))
+                + '<div><button class="p">Aplicar</button></div></form>'
+                '<script nonce="__NONCE__">document.querySelectorAll("#cf select").forEach(function(s){s.onchange=function(){s.form.submit()}});document.querySelector("#cf button").parentNode.hidden=true</script>')
+        return (f'<h2 id="chart">Gráfico</h2><div class="card">{form}'
+                + (self.chart2(ser, mode, money) if any(sum(x[2]) for x in ser) else '<p class="m">Sem dados com estes filtros.</p>')
+                + f'<div class="lgd m">{lg}</div>{extra}</div>')
+
+    def chart2(self, ser, mode, money):
+        W, H, L, B, T = 720, 250, 46, 26, 10; pw, ph = W - L - 6, H - B - T
+        mv = max([sum(x[2][k] for x in ser) for k in range(12)] if mode == "stack" else [max(x[2]) for x in ser] + [0])
+        mag = 10 ** math.floor(math.log10(mv)) if mv > 0 else 1; mx = next((m * mag for m in (1, 2, 2.5, 5, 10) if mv <= m * mag), 10 * mag) if mv > 0 else 100
+        fm = eur if money else (lambda v: f"{v:g}")
+        o = f'<svg class="ch" viewBox="0 0 {W} {H}" role="img" aria-label="Gráfico">'
+        for k in range(5): y = T + ph - ph * k / 4; o += f'<line class="gl" x1="{L}" x2="{W - 6}" y1="{y:.1f}" y2="{y:.1f}"/><text x="{L - 8}" y="{y + 4:.1f}" text-anchor="end">{short(mx * k / 4) if money or mx >= 1000 else f"{mx * k / 4:g}"}</text>'
+        sl = pw / 12
+        for k in range(12):
+            if mode == "group":
+                for j, (n_, c_, arr) in enumerate(ser):
+                    h = ph * arr[k] / mx; bw = sl * .32
+                    o += f'<rect style="fill:{c_}" x="{L + k * sl + sl * .17 + j * (bw + 2):.1f}" y="{T + ph - h:.1f}" width="{bw:.1f}" height="{h:.1f}" rx="3"><title>{MES[k]}: {fm(arr[k])}</title></rect>'
+            else:
+                acc = 0.0; bw = sl * .6
+                for n_, c_, arr in ser:
+                    if arr[k] <= 0: continue
+                    h = ph * arr[k] / mx; acc += h
+                    o += f'<rect style="fill:{c_}" x="{L + k * sl + sl * .2:.1f}" y="{T + ph - acc:.1f}" width="{bw:.1f}" height="{max(h, 1):.1f}" rx="2"><title>{MES[k]} · {e(n_)}: {fm(arr[k])}</title></rect>'
+            o += f'<text x="{L + k * sl + sl / 2:.1f}" y="{H - 7}" text-anchor="middle">{MES[k][:3]}</text>'
+        return o + "</svg>"
 
     def chart(self, fat, rec):
         W, H, L, B, T = 720, 250, 46, 26, 10; pw, ph = W - L - 6, H - B - T; mv = max(fat + rec + [0])

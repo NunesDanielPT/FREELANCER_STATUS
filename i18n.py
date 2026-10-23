@@ -756,6 +756,24 @@ P += [
     ('Preencher e ativar', 'Fill in and activate', 'Rellenar y activar', 'Remplir et activer', 'Compila e attiva'),
 ]
 P += [("Perfil profissional","Professional profile","Perfil profesional","Profil professionnel","Profilo professionale"),("Aparece na rede AV Freelancers para outros colegas te encontrarem. Só fica visível se tu quiseres.","It appears in the AV Freelancers network so other colleagues can find you. It is only visible if you want it to be.","Aparece en la red AV Freelancers para que otros colegas te encuentren. Solo es visible si tú quieres.","Il apparaît dans le réseau AV Freelancers pour que vos collègues vous trouvent. Visible seulement si vous le souhaitez.","Appare nella rete AV Freelancers così i colleghi ti trovano. È visibile solo se vuoi."),("Editar perfil profissional","Edit professional profile","Editar perfil profesional","Modifier le profil professionnel","Modifica profilo professionale")]
+P += [
+    ('Gráfico', 'Chart', 'Gráfico', 'Graphique', 'Grafico'),
+    ('Faturado e recebido', 'Invoiced and received', 'Facturado y cobrado', 'Facturé et encaissé', 'Fatturato e incassato'),
+    ('Peso de cada cliente', 'Weight of each client', 'Peso de cada cliente', 'Poids de chaque client', 'Peso di ogni cliente'),
+    ('Medir', 'Measure', 'Medir', 'Mesurer', 'Misura'),
+    ('Valor sem IVA', 'Amount excl. VAT', 'Importe sin IVA', 'Montant hors TVA', 'Importo IVA esclusa'),
+    ('Dias trabalhados', 'Days worked', 'Días trabajados', 'Jours travaillés', 'Giorni lavorati'),
+    ('Nº de eventos', 'No. of events', 'N.º de eventos', 'Nb d’événements', 'N. di eventi'),
+    ('Só pagos', 'Paid only', 'Solo pagados', 'Seulement payés', 'Solo pagati'),
+    ('Aplicar', 'Apply', 'Aplicar', 'Appliquer', 'Applica'),
+    ('Sem dados com estes filtros.', 'No data with these filters.', 'Sin datos con estos filtros.', 'Aucune donnée avec ces filtres.', 'Nessun dato con questi filtri.'),
+    ('Cliente com mais peso em cada mês', 'Client with the most weight each month', 'Cliente con más peso cada mes', 'Client le plus important chaque mois', 'Cliente con più peso ogni mese'),
+    ('faturado', 'invoiced', 'facturado', 'facturé', 'fatturato'),
+    ('recebido', 'received', 'cobrado', 'encaissé', 'incassato'),
+    ('Outros', 'Others', 'Otros', 'Autres', 'Altri'),
+    ('Sem cliente', 'No client', 'Sin cliente', 'Sans client', 'Senza cliente'),
+    ('Estado', 'Status', 'Estado', 'Statut', 'Stato'),
+]
 # --- e-mails (pt, en, es, fr, it) com {marcadores}
 MAIL = {
     "welcome_s": ("Bem-vindo à {site}", "Welcome to {site}", "Bienvenido a {site}", "Bienvenue sur {site}", "Benvenuto su {site}"),
