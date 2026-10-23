@@ -36,6 +36,10 @@ As traduções estão em `i18n.py`: para corrigir uma frase edita a linha respet
 - As mensagens chegam a **Admin > Suporte** (com contador de novas). Respondes lá; a resposta aparece na conversa do utilizador (ou no link da conversa, para visitantes) e é enviada por email se o SMTP estiver configurado. Também recebes um email de cada mensagem nova.
 - Página **Sobre** (`/about`) explica para que serve o site e quem o fez.
 
+## IVA, retenção e Segurança Social
+
+Cada evento tem **IVA** (23/13/6 %, sem IVA ou autoliquidação) e **retenção na fonte de IRS**. Em Conta → *Faturação e impostos* defines os valores predefinidos (país, IVA, retenção, Segurança Social). Nas Estatísticas há uma tabela de impostos por trimestre e uma estimativa da Segurança Social (taxa × % do rendimento, por defeito 21,4 % × 70 %). São valores indicativos, não substituem o contabilista.
+
 ## Chat em tempo real
 
 - Servidor WebSocket próprio (sem dependências) no mesmo porto: mensagens instantâneas, "online / visto por último", "a escrever…", ✓ enviado / ✓✓ lido e contadores de não lidas.

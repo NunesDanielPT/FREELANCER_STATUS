@@ -116,9 +116,12 @@ def reg_allowed(c): return c["reg_open"] == "1" or not one("select 1 from users"
 
 def migrate(c):
     cols = {r[1] for r in c.execute("pragma table_info(users)")}
+    ec = {r[1] for r in c.execute("pragma table_info(events)")}
+    for name, ddl in (("vat_mode", "text default 'none'"), ("vat_rate", "real default 0"), ("wh_rate", "real default 0")):
+        if ec and name not in ec: c.execute(f"alter table events add column {name} {ddl}")
     mc = {r[1] for r in c.execute("pragma table_info(chat_msgs)")}
     if mc and "img" not in mc: c.execute("alter table chat_msgs add column img integer default 0")
-    for name, ddl in (("is_admin", "integer default 0"), ("disabled", "integer default 0"), ("last_seen", "text"), ("av_v", "integer default 0"), ("guide_seen", "integer default 0")):
+    for name, ddl in (("is_admin", "integer default 0"), ("disabled", "integer default 0"), ("last_seen", "text"), ("av_v", "integer default 0"), ("guide_seen", "integer default 0"), ("vat_country", "text default 'PT'"), ("vat_def", "text default 'none'"), ("wh_def", "real default 0"), ("ss_on", "integer default 0"), ("ss_rate", "real default 21.4"), ("ss_coef", "real default 70")):
         if name not in cols: c.execute(f"alter table users add column {name} {ddl}")
     if not c.execute("select 1 from users where is_admin=1").fetchone():
         c.execute("update users set is_admin=1 where id=(select min(id) from users)")
@@ -433,6 +436,7 @@ code,textarea.mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.
 .bell .nb{position:absolute;top:-6px;right:-8px;margin:0}.avset{display:flex;gap:16px;align-items:center;flex-wrap:wrap}.avset .av{width:72px;height:72px;font-size:1.5rem}
 @media(max-width:820px){.main.chat{padding:0}.cw{grid-template-columns:1fr;height:calc(100dvh - 56px - 68px);border-radius:0;border-left:0;border-right:0}.cw.open .cl{display:none}.cw:not(.open) .crm{display:none}.rh .back,.gnew .back{display:block}}
 .tip{display:flex;align-items:center;gap:6px;background:color-mix(in srgb,var(--brand) 11%,var(--sf));border:1px solid color-mix(in srgb,var(--brand) 30%,var(--line));border-radius:12px;padding:8px 8px 8px 14px;margin-bottom:14px}.tip a{flex:1;text-decoration:none;color:var(--ink);font-weight:600;font-size:.92rem}.tip form{margin:0}.tip .ib{color:var(--mut)}
+.tl{display:block;text-align:right;color:var(--mut);font-size:.78rem;font-variant-numeric:tabular-nums}.cu{margin-top:6px}.cu[hidden]{display:none}.tx div{display:flex;justify-content:space-between;padding:3px 2px;color:var(--mut);font-variant-numeric:tabular-nums}.tx .tt{color:var(--ink);font-weight:700;font-size:1.05rem;border-top:1px solid var(--line);margin-top:4px;padding-top:8px}
 .gc{display:flex;gap:14px;align-items:center;text-decoration:none;color:inherit;margin-bottom:10px}.gc:hover{border-color:var(--brand)}.gn{width:30px;height:30px;border-radius:50%;background:var(--brand);color:#fff;display:grid;place-items:center;font-weight:700;font-size:.85rem;flex:none}.gi2{font-size:1.5rem}.gt p,.gt li{font-size:1.02rem;line-height:1.55}.gt li{margin:8px 0}
 .nb[hidden]{display:none}.av.s{width:18px;height:18px;font-size:.6rem;border-radius:50%;vertical-align:middle;margin-right:5px;display:inline-grid;place-items:center;object-fit:cover}
 .mi{display:block;max-width:100%;max-height:300px;border-radius:10px;margin:2px 0 4px;cursor:zoom-in}.mx{color:var(--mut);font-style:italic}
@@ -507,6 +511,43 @@ def auth_page(title, inner):
 def pub_page(title, body):
     c = cfg(); sn = e(c["site_name"]); lg = logo(c)
     return head(eh(title) + " · " + sn, c) + f'<div class="pub"><a class="brand" href="/guide" title="Como funciona">{lg}{sn}</a><main>{ad_html(c, "auth")}{body}{foot()}</main></div></body></html>'
+
+COUNTRIES = {"PT": ("Portugal (continente)", (23, 13, 6)), "PT-MA": ("Portugal (Madeira)", (22, 12, 4)), "PT-AC": ("Portugal (Açores)", (16, 9, 4)),
+             "ES": ("España", (21, 10, 4)), "FR": ("France", (20, 10, 5.5)), "IT": ("Italia", (22, 10, 5)), "GB": ("United Kingdom", (20, 5))}
+WH_RATES = (23, 16.5, 11.5)
+VATSQL = "(case when vat_mode='rate' then amount*vat_rate/100.0 else 0 end)"
+WHSQL = "(amount*wh_rate/100.0)"
+CASHSQL = f"(amount+{VATSQL}-{WHSQL})"
+
+def pct(x): return f"{x:g}".replace(".", dsep())
+def vat_code(mode, rate): return mode if mode in ("none", "rc") else f"{rate:g}"
+def parse_vat(code, custom=""):
+    if code == "rc": return "rc", 0.0
+    r = num(custom) if code == "custom" else (0.0 if code in ("none", "", None) else num(code))
+    return ("rate", min(r, 100.0)) if r > 0 else ("none", 0.0)
+def parse_wh(code, custom=""):
+    r = num(custom) if code == "custom" else num(code or "0"); return min(max(r, 0.0), 60.0)
+def tax_of(r):
+    base = r["amount"] or 0; v = base * (r["vat_rate"] or 0) / 100 if r["vat_mode"] == "rate" else 0.0; w = base * (r["wh_rate"] or 0) / 100
+    return v, w, base + v - w
+
+def vat_select(country, code, name="vat", cname="vatc", cval=""):
+    rates = COUNTRIES.get(country, COUNTRIES["PT"])[1]
+    opts = [("none", "Sem IVA (isento)")] + [(f"{x:g}", f"IVA {pct(x)}%") for x in rates] + [("rc", "IVA liquidado pelo cliente (autoliquidação)")]
+    if code not in {o[0] for o in opts}: opts.insert(1, (code, f"IVA {pct(num(code))}%"))
+    opts.append(("custom", "Outra taxa..."))
+    o = "".join(f'<option value="{k}"{" selected" if k == code else ""}>{l}</option>' for k, l in opts)
+    return f'<select name="{name}" data-cu="{cname}">{o}</select><input class="cu" name="{cname}" inputmode="decimal" placeholder="%" value="{e(cval)}" hidden>'
+
+def wh_select(rate, name="wh", cname="whc"):
+    code = f"{rate:g}" if rate else "0"
+    opts = [("0", "Sem retenção")] + [(f"{x:g}", f"Retenção {pct(x)}%") for x in WH_RATES]
+    if code not in {o[0] for o in opts}: opts.insert(1, (code, f"Retenção {pct(rate)}%"))
+    opts.append(("custom", "Outra taxa..."))
+    o = "".join(f'<option value="{k}"{" selected" if k == code else ""}>{l}</option>' for k, l in opts)
+    return f'<select name="{name}" data-cu="{cname}">{o}</select><input class="cu" name="{cname}" inputmode="decimal" placeholder="%" hidden>'
+
+CUJS = '<script nonce="__NONCE__">document.querySelectorAll("select[data-cu]").forEach(function(s){var i=s.parentNode.querySelector("[name="+s.dataset.cu+"]");function t(){i.hidden=s.value!="custom";if(!i.hidden)i.focus()}s.addEventListener("change",t)})</script>'
 
 def uname(r): return (r["name"] or r["username"]) if r else "?"
 IC["bell"] = '<path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/>'
@@ -659,11 +700,13 @@ def tog(r, nxt):
     return '<div class="tg">' + b("invoiced", "Faturada", r["invoice_date"], "f") + b("paid", "Paga", r["paid"], "p2") + "</div>"
 
 def ev_row(r, nxt):
+    v_, w_, t_ = tax_of(r)
+    tl = f'<small class="tl" title="{eh("Total a receber")}">= {eur(t_)}</small>' if (v_ or w_) else ""
     meta = f'{drange(r["start_date"], r["end_date"])} · {(e(r["cn"]) if r["cn"] else "sem cliente")}'
     if r["invoice_date"]: meta += f' · faturada {ds(r["invoice_date"])}'
     elif r["end_date"] < today().isoformat(): meta += ' · <em class="late">terminou, falta faturar</em>'
     return (f'<div class="er {state(r)}"><a class="eh" href="/event/{r["id"]}">{avatar(r["cn"] or "?", r["cl"])}<div><b>{e(r["title"])}</b><small>{meta}</small></div></a>'
-            f'<div class="ea"><span class="amt">{eur(r["amount"])}</span>{tog(r, nxt)}</div></div>')
+            f'<div class="ea"><span class="amt">{eur(r["amount"])}</span>{tl}{tog(r, nxt)}</div></div>')
 
 def lst(rs, nxt, empty): return '<div class="list">' + ("".join(ev_row(r, nxt) for r in rs) or f'<div class="empty">{empty}</div>') + "</div>"
 
@@ -796,6 +839,11 @@ class H(BaseHTTPRequestHandler):
         if p == "/settings/avatar/remove":
             run("delete from avatars where user_id=?", (i,)); run("update users set av_v=0 where id=?", (i,)); return self.go("/settings?ok=avatar_rm")
         if p == "/settings/ics": run("update users set ics=? where id=?", (secrets.token_hex(20), i)); return self.go("/settings?ok=ics")
+        if p == "/settings/tax":
+            vm, vr = parse_vat(f.get("vat", "none"), f.get("vatc", "")); co = f.get("country", "PT") if f.get("country") in COUNTRIES else "PT"
+            run("update users set vat_country=?, vat_def=?, wh_def=?, ss_on=?, ss_rate=?, ss_coef=? where id=?",
+                (co, vat_code(vm, vr), parse_wh(f.get("wh", "0"), f.get("whc", "")), 1 if f.get("ss_on") else 0, min(max(num(f.get("ss_rate", "21.4")), 0), 60), min(max(num(f.get("ss_coef", "70")), 0), 100), u["id"]))
+            return self.go("/settings?ok=tax")
         if p == "/settings/profile": return self.save_profile(u, f)
         if p == "/settings/password": return self.save_password(u, f)
         self.go("/")
@@ -838,6 +886,7 @@ class H(BaseHTTPRequestHandler):
             try:
                 first = 0 if one("select 1 from users") else 1
                 uid = run("insert into users(username,email,name,pw,ics,created,is_admin) values(?,?,?,?,?,?,?)", (v["u"], v["email"], v["u"], hash_pw(f["p"]), secrets.token_hex(20), today().isoformat(), first))
+                run("update users set vat_def='23' where id=?", (uid,))
             except sqlite3.IntegrityError: err = "Esse utilizador ou email já está registado."
         if err: return self.out(self.register_page(err, v), 400)
         mail_async(v["email"], i18n.mail("welcome_s", site=SN()), i18n.mail("welcome_b", name=v["u"], site=SN(), user=v["u"], enter=i18n.mail("enter", url=BASE_URL) if BASE_URL else ""))
@@ -1172,14 +1221,16 @@ class H(BaseHTTPRequestHandler):
         up = rows(EV + "where e.user_id=? and e.end_date>=? order by e.start_date limit 5", (i, today().isoformat()))
         fm = one("select coalesce(sum(amount),0) s from events where user_id=? and substr(invoice_date,1,7)=?", (i,ym))["s"]
         rm = one("select coalesce(sum(amount),0) s from events where user_id=? and paid=1 and substr(invoice_date,1,7)=?", (i,ym))["s"]
+        rm = one(f"select coalesce(sum({CASHSQL}),0) s from events where user_id=? and paid=1 and substr(invoice_date,1,7)=?", (i, ym))["s"]
         s = lambda l: sum(x["amount"] or 0 for x in l)
+        sc = lambda l: sum(tax_of(x)[2] for x in l)
         tile = lambda c, lab, val, sub: f'<div class="st" style="--c:{c}"><span>{lab}</span><b>{eur(val)}</b><span>{sub}</span></div>'
         tip = ""
         if not u["guide_seen"] and not one("select 1 from events where user_id=?", (i,)):
             tip = '<div class="tip"><a href="/guide">👋 Novo por aqui? Vê em 2 minutos como funciona. <b>›</b></a><form method="post" action="/guide/dismiss"><button class="ib" aria-label="Fechar" title="Fechar">✕</button></form></div>'
         return page("Início", tip + f'<div class="bar-h"><div><h1>Olá, {e(u["name"] or u["username"])}</h1><p class="sub" style="margin:0">O ponto da situação.</p></div><a class="btn p" href="/event/new">Novo evento</a></div>'
             f'<div class="mn"><a class="btn" href="/?m={prev}">‹</a><b>{mn} {first.year}</b><a class="btn" href="/?m={nxt}">›</a><span class="m">aplica-se a Faturado e Recebido</span></div>'
-            '<div class="strip">' + tile("var(--todo)", "Por faturar", s(a), pl(len(a), "evento")) + tile("var(--inv)", "Faturado, por receber", s(b), pl(len(b), "evento"))
+            '<div class="strip">' + tile("var(--todo)", "Por faturar", s(a), pl(len(a), "evento")) + tile("var(--inv)", "Faturado, por receber", sc(b), pl(len(b), "evento"))
             + tile("var(--brand)", f"Faturado em {mn}", fm, "pela data da fatura") + tile("var(--paid)", f"Recebido de {mn}", rm, "já pago") + '</div>'
             + "<h2>Por faturar</h2>" + lst(a, "/", "Nada por faturar. 🎬") + "<h2>Por receber</h2>" + lst(b, "/", "Nada por receber.") + "<h2>Próximos eventos</h2>" + lst(up, "/", "Sem eventos futuros."), "/", u)
 
@@ -1205,17 +1256,28 @@ class H(BaseHTTPRequestHandler):
             + fld("Título", "title", val=v["title"] if v else "", extra="required" + ("" if v else " autofocus"))
             + f'<div class="g2"><div><label>Data de início</label><input type="date" id="sd" name="start" value="{sd}" required></div><div><label>Data de fim</label><input type="date" id="ed" name="end" value="{ed}" required></div></div>'
             f'<label>Cliente</label><select id="cs" name="client_id"><option value="">— sem cliente —</option>{cl}</select><div class="info" id="ci" hidden></div>'
-            f'<label>Valores</label><div id="items">{rowsh}</div><button type="button" id="add">+ Adicionar linha</button><div class="sum">Total<span id="tot">0{dsep()}00 €</span></div>'
+            f'<label>Valores</label><div id="items">{rowsh}</div><button type="button" id="add">+ Adicionar linha</button><div class="sum">Valor sem IVA<span id="tot">0{dsep()}00 €</span></div>'
+            f'<div class="g2"><div><label>IVA</label>{vat_select(u["vat_country"] or "PT", vat_code(v["vat_mode"], v["vat_rate"]) if v else u["vat_def"] or "none")}</div><div><label>Retenção na fonte (IRS)</label>{wh_select((v["wh_rate"] if v else u["wh_def"]) or 0)}</div></div>'
+            f'<div class="tx" id="tx" data-iva="{eh(tx("IVA"))}" data-ret="{eh(tx("Retenção"))}" data-tot="{eh(tx("Total a receber"))}" data-rc="{eh(tx("IVA liquidado pelo cliente (autoliquidação)"))}"></div>'
             '<datalist id="sug">' + "".join(f'<option value="{eh(tx(x))}">' for x in ("Diária", "Meia diária", "Hora extra", "Aluguer de equipamento", "Deslocação", "Edição")) + '</datalist>'
             + f'<div class="g2"><div><label>Data da fatura (vazio = por faturar)</label><input type="date" name="invoice_date" value="{e(v["invoice_date"] if v else "")}"></div><div><label>N.º da fatura</label><input name="invoice_no" value="{e(v["invoice_no"] if v else "")}"></div></div>'
             f'<label class="c" style="margin-top:14px"><input type="checkbox" name="paid" {ck(v and v["paid"])}>Fatura paga (já recebi)</label><label>Notas</label><textarea name="notes" rows="3">{e(v["notes"] if v else "")}</textarea>'
             '<p><button class="p">Guardar</button> <a class="btn" href="/events">Cancelar</a></p></form>' + dele
-            + '<script nonce="__NONCE__">(function(){var L=document.getElementById("items"),T=document.getElementById("tot");function tot(){var s=0;L.querySelectorAll("[name=amt]").forEach(function(i){s+=parseFloat(i.value.replace(",","."))||0});T.textContent=s.toFixed(2).replace(".","' + dsep() + '")+" €"}'
+            + CUJS + '<script nonce="__NONCE__">(function(){var L=document.getElementById("items"),T=document.getElementById("tot");function tot(){var s=0;L.querySelectorAll("[name=amt]").forEach(function(i){s+=parseFloat(i.value.replace(",","."))||0});T.textContent=s.toFixed(2).replace(".","' + dsep() + '")+" €";if(window.TX)window.TX(s)}'
             'L.addEventListener("input",tot);tot();document.getElementById("add").onclick=function(){var d=document.createElement("div");d.className="it";d.innerHTML=\'<input name="label" list="sug" placeholder="' + tx("Descrição") + '"><input name="amt" inputmode="decimal" placeholder="0' + dsep() + '00">\';L.appendChild(d);d.firstChild.focus()};'
             'var S=document.getElementById("cs"),I=document.getElementById("ci");function inf(){var o=S.options[S.selectedIndex];I.textContent=o.dataset.i||"";I.hidden=!o.dataset.i}S.onchange=inf;inf();'
-            'var a=document.getElementById("sd"),b=document.getElementById("ed");a.onchange=function(){if(!b.value||b.value<a.value)b.value=a.value}})();</script>', "/events", u)
+            'var a=document.getElementById("sd"),b=document.getElementById("ed");a.onchange=function(){if(!b.value||b.value<a.value)b.value=a.value}})();</script>'
+            + '<script nonce="__NONCE__">(function(){var X=document.getElementById("tx"),V=document.querySelector("[name=vat]"),W=document.querySelector("[name=wh]"),VC=document.querySelector("[name=vatc]"),WC=document.querySelector("[name=whc]"),DS="' + dsep() + '";'
+            'function n(x){return parseFloat(String(x).replace(",","."))||0}function f(x){return x.toFixed(2).replace(".",DS)+" €"}function p(x){return String(x).replace(".",DS)}'
+            'window.TX=function(b){if(b===undefined){b=0;document.querySelectorAll("[name=amt]").forEach(function(i){b+=n(i.value)})}'
+            'var vr=V.value=="custom"?n(VC.value):(V.value=="none"||V.value=="rc")?0:n(V.value),wr=W.value=="custom"?n(WC.value):n(W.value),v=b*vr/100,w=b*wr/100,h="";'
+            'if(vr>0)h+="<div><span>"+X.dataset.iva+" "+p(vr)+"%</span><span>+"+f(v)+"</span></div>";else if(V.value=="rc")h+="<div><span>"+X.dataset.rc+"</span><span>"+f(0)+"</span></div>";'
+            'if(wr>0)h+="<div><span>"+X.dataset.ret+" "+p(wr)+"%</span><span>\u2212"+f(w)+"</span></div>";'
+            'if(vr>0||wr>0)h+="<div class=tt><span>"+X.dataset.tot+"</span><span>"+f(b+v-w)+"</span></div>";X.innerHTML=h};'
+            '[V,W,VC,WC].forEach(function(e){e.addEventListener("input",function(){TX()});e.addEventListener("change",function(){TX()})});TX()})();</script>', "/events", u)
 
     def save_event(self, u, f):
+        vm, vr = parse_vat(f.get("vat", "none"), f.get("vatc", "")); wr = parse_wh(f.get("wh", "0"), f.get("whc", ""))
         i = u["id"]; ex = one("select * from events where id=? and user_id=?", (f.get("id") or 0, i))
         sd = okdate(f.get("start", "")) or today().isoformat(); ed = okdate(f.get("end", "")) or sd; ed = sd if ed < sd else ed
         cid = f.get("client_id") if one("select 1 from clients where id=? and user_id=?", (f.get("client_id") or 0, i)) else None
@@ -1224,11 +1286,11 @@ class H(BaseHTTPRequestHandler):
         if paid and not inv: inv = t
         if not inv: paid = 0
         pd = (ex["paid_date"] if ex and ex["paid_date"] else t) if paid else None
-        v = (f.get("title", "").strip()[:150] or "Evento", sd, ed, cid, sum(a for _, a in its), inv, f.get("invoice_no", "").strip()[:40], paid, pd, f.get("notes", "")[:2000])
+        v = (f.get("title", "").strip()[:150] or "Evento", sd, ed, cid, sum(a for _, a in its), inv, f.get("invoice_no", "").strip()[:40], paid, pd, f.get("notes", "")[:2000], vm, vr, wr)
         c = db()
         try:
-          if ex: c.execute("update events set title=?,start_date=?,end_date=?,client_id=?,amount=?,invoice_date=?,invoice_no=?,paid=?,paid_date=?,notes=? where id=?", v + (ex["id"],)); eid = ex["id"]
-          else: eid = c.execute("insert into events(title,start_date,end_date,client_id,amount,invoice_date,invoice_no,paid,paid_date,notes,user_id) values(?,?,?,?,?,?,?,?,?,?,?)", v + (i,)).lastrowid
+          if ex: c.execute("update events set title=?,start_date=?,end_date=?,client_id=?,amount=?,invoice_date=?,invoice_no=?,paid=?,paid_date=?,notes=?,vat_mode=?,vat_rate=?,wh_rate=? where id=?", v + (ex["id"],)); eid = ex["id"]
+          else: eid = c.execute("insert into events(title,start_date,end_date,client_id,amount,invoice_date,invoice_no,paid,paid_date,notes,vat_mode,vat_rate,wh_rate,user_id) values(?,?,?,?,?,?,?,?,?,?,?,?,?,?)", v + (i,)).lastrowid
           c.execute("delete from items where event_id=?", (eid,)); c.executemany("insert into items(event_id,label,amount) values(?,?,?)", [(eid, l, a) for l, a in its]); c.commit()
         finally: c.close()
         self.go("/events")
@@ -1300,6 +1362,25 @@ class H(BaseHTTPRequestHandler):
         tf, tr, td = sum(fat), sum(rec), sum(c["d"] for c in cl); act = [k for k in range(12) if fat[k] > 0]
         best = max(act, key=lambda k: fat[k]) if act else None; worst = min(act, key=lambda k: fat[k]) if len(act) > 1 else None
         chips = "".join(f'<a class="{"on" if x == y else ""}" href="/stats?y={x}">{x}</a>' for x in years)
+        Q = {k: {"b": 0.0, "v": 0.0, "w": 0.0} for k in (1, 2, 3, 4)}
+        for r in rows(f"select (cast(substr(invoice_date,6,2) as int)+2)/3 q, sum(amount) b, sum({VATSQL}) v, sum({WHSQL}) w from events where user_id=? and substr(invoice_date,1,4)=? group by q", (i, str(y))):
+            Q[r["q"]] = {"b": r["b"] or 0, "v": r["v"] or 0, "w": r["w"] or 0}
+        tq = lambda key: sum(Q[k][key] for k in Q)
+        qt = "".join(f'<tr><td>Trimestre {k}</td><td>{eur(Q[k]["b"])}</td><td>{eur(Q[k]["v"])}</td><td>{eur(Q[k]["w"])}</td><td>{eur(Q[k]["b"] + Q[k]["v"] - Q[k]["w"])}</td></tr>' for k in Q)
+        tax = (f'<h2>Impostos por trimestre</h2><div class="card sc"><table class="tb"><tr><th>Trimestre</th><th>Faturado (sem IVA)</th><th>IVA</th><th>Retenção IRS</th><th>Total a receber</th></tr>{qt}'
+               f'<tr><td><b>Total</b></td><td><b>{eur(tq("b"))}</b></td><td><b>{eur(tq("v"))}</b></td><td><b>{eur(tq("w"))}</b></td><td><b>{eur(tq("b") + tq("v") - tq("w"))}</b></td></tr></table></div>'
+               '<p class="m">O IVA é do Estado (não é rendimento teu) e a retenção é imposto que o cliente já entregou por ti. Contam as faturas do ano pela data da fatura.</p>')
+        if u["ss_on"]:
+            rt, cf = (u["ss_rate"] if u["ss_rate"] is not None else 21.4), (u["ss_coef"] if u["ss_coef"] is not None else 70)
+            pay = {1: (5, 7), 2: (8, 10), 3: (11, 1), 4: (2, 4)}
+            def rr(k):
+                a, b2 = pay[k]; return f"{MES[a - 1][:3]}–{MES[b2 - 1][:3]}"
+            sr = "".join(f'<tr><td>Trimestre {k}</td><td>{eur(Q[k]["b"])}</td><td>{eur(Q[k]["b"] * cf / 100)}</td><td>{eur(Q[k]["b"] * cf / 100 * rt / 100)}</td><td>{eur(Q[k]["b"] * cf / 100 * rt / 100 / 3)}</td><td>{rr(k)}</td></tr>' for k in Q)
+            tax += (f'<h2>Segurança Social (estimativa)</h2><div class="card sc"><table class="tb"><tr><th>Trimestre</th><th>Faturado (sem IVA)</th><th>Rendimento relevante</th><th>Contribuição</th><th>Por mês</th><th>A pagar em</th></tr>{sr}'
+                    f'<tr><td><b>Total</b></td><td><b>{eur(tq("b"))}</b></td><td><b>{eur(tq("b") * cf / 100)}</b></td><td><b>{eur(tq("b") * cf / 100 * rt / 100)}</b></td><td></td><td></td></tr></table></div>'
+                    f'<p class="m">{pct(rt)}% × {pct(cf)}% do faturado em cada trimestre, repartido por 3 meses. Estimativa sem limites mínimo e máximo, sem a isenção do primeiro ano e sem ajustes. Confirma sempre na Segurança Social Direta.</p>')
+        else:
+            tax += '<p class="m">Queres ver a estimativa da Segurança Social? Ativa-a em <a href="/settings">Conta</a>.</p>'
         tile = lambda c, lab, val, sub="": f'<div class="st" style="--c:{c}"><span>{lab}</span><b>{val}</b><span>{sub}</span></div>'
         strip = '<div class="strip">' + tile("var(--brand)", "Faturado", eur(tf), f"média {eur(tf / len(act)) if act else '—'}/mês") + tile("var(--paid)", "Recebido", eur(tr), f"por receber {eur(tf - tr)}") \
             + tile("var(--inv)", "Dias trabalhados", f"{td:g}", pl(sum(cnt), "evento")) + tile("var(--todo)", "Melhor mês", MES[best].capitalize() if best is not None else "—", eur(fat[best]) if best is not None else "") + '</div>'
@@ -1311,7 +1392,7 @@ class H(BaseHTTPRequestHandler):
             f'<h2>Faturado e recebido por mês</h2><div class="card">{self.chart(fat, rec)}<div class="lgd m"><span style="--c:var(--brand)">faturado</span><span style="--c:var(--paid)">recebido</span></div></div>'
             f'<div class="card sc"><table class="tb"><tr><th>Mês</th><th>Eventos</th><th>Faturado</th><th>Recebido</th><th>Por receber</th></tr>{mt}<tr><td><b>Total</b></td><td><b>{sum(cnt)}</b></td><td><b>{eur(tf)}</b></td><td><b>{eur(tr)}</b></td><td><b>{eur(tf - tr)}</b></td></tr></table></div>'
             f'<h2>Clientes</h2><div class="g2"><div class="card"><b>Quem dá mais volume</b><div style="margin-top:8px">{hb("v", mx, eur)}</div></div><div class="card"><b>Dias trabalhados</b><div style="margin-top:8px">{hb("d", mxd, lambda v: f"{v:g} dias")}</div></div></div>'
-            f'<div class="card sc"><table class="tb"><tr><th>Cliente</th><th>Eventos</th><th>Dias</th><th>Faturado</th><th>€/dia</th><th>Peso</th></tr>{ct}</table></div>', "/stats", u)
+            f'<div class="card sc"><table class="tb"><tr><th>Cliente</th><th>Eventos</th><th>Dias</th><th>Faturado</th><th>€/dia</th><th>Peso</th></tr>{ct}</table></div>' + tax, "/stats", u)
 
     def chart(self, fat, rec):
         W, H, L, B, T = 720, 250, 46, 26, 10; pw, ph = W - L - 6, H - B - T; mv = max(fat + rec + [0])
@@ -1683,12 +1764,29 @@ class H(BaseHTTPRequestHandler):
             f'<div class="row2">{btn("close", "Reabrir conversa" if t["status"] == "closed" else "Fechar conversa")}{btn("delete", "Apagar conversa", "d")}</div>'), ok, err)
 
     # ---- definições
+    def tax_card(self, u):
+        co = "".join(f'<option value="{k}"{" selected" if k == (u["vat_country"] or "PT") else ""}>{v[0]}</option>' for k, v in COUNTRIES.items())
+        rt = json.dumps({k: [f"{x:g}" for x in v[1]] for k, v in COUNTRIES.items()})
+        lab = json.dumps({"none": tx("Sem IVA (isento)"), "rc": tx("IVA liquidado pelo cliente (autoliquidação)"), "custom": tx("Outra taxa..."), "iva": tx("IVA")})
+        return ('<form class="f card" method="post" action="/settings/tax"><h2>Faturação e impostos</h2><p class="m">Valores predefinidos: aparecem logo em cada novo evento e podes mudá-los em cada fatura.</p>'
+                f'<label>País / regime de IVA</label><select name="country" id="tc">{co}</select>'
+                f'<label>IVA predefinido</label><div id="tv" data-r="{e(rt)}" data-l="{e(lab)}">{vat_select(u["vat_country"] or "PT", u["vat_def"] or "none", "vat", "vatc")}</div>'
+                f'<label>Retenção na fonte predefinida (IRS)</label><div>{wh_select(u["wh_def"] or 0)}</div>'
+                f'<label class="c" style="margin-top:16px"><input type="checkbox" name="ss_on" {"checked" if u["ss_on"] else ""}>Calcular a Segurança Social (estimativa trimestral)</label>'
+                f'<div class="g2"><div><label>Taxa contributiva (%)</label><input name="ss_rate" inputmode="decimal" value="{pct(u["ss_rate"] if u["ss_rate"] is not None else 21.4)}"></div>'
+                f'<div><label>% do rendimento considerada</label><input name="ss_coef" inputmode="decimal" value="{pct(u["ss_coef"] if u["ss_coef"] is not None else 70)}"></div></div>'
+                '<p class="m">Valores indicativos para Portugal: IVA 23% (continente), retenção na fonte de IRS 23%, 16,5% ou 11,5% conforme a atividade, e Segurança Social de 21,4% sobre 70% do rendimento dos serviços. Confirma com o teu contabilista.</p>'
+                '<p><button class="p">Guardar</button></p></form>' + CUJS +
+                '<script nonce="__NONCE__">(function(){var c=document.getElementById("tc"),b=document.getElementById("tv"),R=JSON.parse(b.dataset.r),L=JSON.parse(b.dataset.l);c.onchange=function(){var s=b.querySelector("select"),k=s.value,o=[["none",L.none]];(R[c.value]||[]).forEach(function(x){o.push([x,L.iva+" "+x.replace(".","' + dsep() + '")+"%"])});o.push(["rc",L.rc],["custom",L.custom]);'
+                's.innerHTML="";o.forEach(function(x){var e=document.createElement("option");e.value=x[0];e.textContent=x[1];if(x[0]==k)e.selected=true;s.appendChild(e)})}})();</script>')
+
     def settings(self, u, ok="", err=""):
         proto = "https" if self.https() else "http"; url = f'{BASE_URL or proto + "://" + str(self.headers.get("Host"))}/calendar.ics?k={u["ics"]}'
-        msg = {"profile": "Dados guardados.", "password": "Palavra-passe alterada.", "ics": "Link novo gerado. O antigo deixou de funcionar.", "avatar": "Foto guardada.", "avatar_rm": "Foto removida."}.get(ok); m = f'<p class="msg ok">{msg}</p>' if msg else (f'<p class="msg err">{err}</p>' if err else "")
+        msg = {"profile": "Dados guardados.", "password": "Palavra-passe alterada.", "ics": "Link novo gerado. O antigo deixou de funcionar.", "avatar": "Foto guardada.", "avatar_rm": "Foto removida.", "tax": "Preferências de faturação guardadas."}.get(ok); m = f'<p class="msg ok">{msg}</p>' if msg else (f'<p class="msg err">{err}</p>' if err else "")
         return page("Conta", f'<h1>Conta</h1><p class="sub">Os teus dados e a tua segurança.</p>{m}<form class="f card" method="post" action="/settings/profile"><h2>Dados pessoais</h2>'
             + fld("Nome", "name", val=u["name"], extra="required") + fld("Email", "email", "email", u["email"], "required") + fld("Telemóvel", "phone", "tel", u["phone"] or "")
             + f'<p class="m">Utilizador: <b>{e(u["username"])}</b></p><p><button class="p">Guardar dados</button></p></form>'
+            + self.tax_card(u) +
             '<div class="card" id="pwa"><h2>Instalar como aplicação</h2><p class="m">Usa o site como uma app no telemóvel: ícone no ecrã principal, ecrã inteiro e avisos.</p>'
             '<p><button type="button" class="p" id="pwab" hidden>Instalar app</button></p>'
             '<p class="m"><b>Android (Chrome):</b> menu ⋮ → «Instalar app» ou «Adicionar ao ecrã principal».<br><b>iPhone/iPad (Safari):</b> botão Partilhar → «Adicionar ao ecrã principal».</p></div>'
